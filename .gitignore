@@ -1,0 +1,15 @@
+node_modules/
+.pnpm-store/
+.next/
+dist/
+coverage/
+.env
+.env.local
+.env.*.local
+!.env.example
+*.log
+.DS_Store
+.vscode/
+.idea/
+apps/api/src/generated/prisma/
+apps/api/prisma/dev.db

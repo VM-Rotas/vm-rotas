@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vm_rotas}
+      POSTGRES_USER: ${POSTGRES_USER:-vm_rotas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vm_rotas_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - vm_rotas_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vm_rotas} -d ${POSTGRES_DB:-vm_rotas}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vm_rotas}:${POSTGRES_PASSWORD:-vm_rotas_dev}@db:5432/${POSTGRES_DB:-vm_rotas}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-vm-rotas-dev-secret-change-me-1234567890}
+      WEB_ORIGIN: http://localhost:3000
+      COOKIE_SECURE: "false"
+      SWAGGER_ENABLED: "true"
+      RUN_MIGRATIONS: "true"
+      RUN_SEED: "true"
+      DEFAULT_TIME_ZONE: America/Sao_Paulo
+      ROUTE_OPTIMIZATION_PROVIDER: ${ROUTE_OPTIMIZATION_PROVIDER:-local}
+      LOCAL_AVG_SPEED_KMH: ${LOCAL_AVG_SPEED_KMH:-35}
+      GOOGLE_MAPS_SERVER_API_KEY: ${GOOGLE_MAPS_SERVER_API_KEY:-}
+      GOOGLE_CLOUD_PROJECT_ID: ${GOOGLE_CLOUD_PROJECT_ID:-}
+      GOOGLE_ROUTE_OPTIMIZATION_ENABLED: ${GOOGLE_ROUTE_OPTIMIZATION_ENABLED:-false}
+    ports:
+      - "3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api}
+        NEXT_PUBLIC_DEMO_MODE: ${NEXT_PUBLIC_DEMO_MODE:-true}
+        NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY: ${NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY:-}
+        NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID: ${NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID:-DEMO_MAP_ID}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api}
+      NEXT_PUBLIC_DEMO_MODE: ${NEXT_PUBLIC_DEMO_MODE:-true}
+      NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY: ${NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY:-}
+      NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID: ${NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID:-DEMO_MAP_ID}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  vm_rotas_postgres:

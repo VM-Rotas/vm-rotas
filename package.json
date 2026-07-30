@@ -1,0 +1,22 @@
+{
+  "name": "vm-rotas",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @vm-rotas/api --filter @vm-rotas/web dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "db:generate": "pnpm --filter @vm-rotas/api prisma:generate",
+    "db:migrate": "pnpm --filter @vm-rotas/api prisma:migrate",
+    "db:deploy": "pnpm --filter @vm-rotas/api prisma:deploy",
+    "db:seed": "pnpm --filter @vm-rotas/api prisma:seed",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down -v"
+  }
+}
