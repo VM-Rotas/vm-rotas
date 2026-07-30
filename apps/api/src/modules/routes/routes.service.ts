@@ -245,6 +245,7 @@ export class RoutesService {
           organizationId: user.organizationId,
           status: { in: ['PLANNED', 'READY'] },
         },
+        include: { customer: true },
       });
       if (!urgent) throw new BadRequestException('A ordem urgente informada não está disponível.');
       if (urgent.latitude == null || urgent.longitude == null) {
