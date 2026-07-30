@@ -29,7 +29,7 @@ export class AuthController {
     response.cookie(AUTH_COOKIE_NAME, result.token, {
       httpOnly: true,
       secure: this.config.get<boolean>('COOKIE_SECURE', false),
-      sameSite: 'lax',
+      sameSite: this.config.get<boolean>('COOKIE_SECURE', false) ? 'none' : 'lax',
       path: '/',
       maxAge: AUTH_TOKEN_TTL_SECONDS * 1000,
     });
@@ -44,7 +44,7 @@ export class AuthController {
     response.clearCookie(AUTH_COOKIE_NAME, {
       httpOnly: true,
       secure: this.config.get<boolean>('COOKIE_SECURE', false),
-      sameSite: 'lax',
+      sameSite: this.config.get<boolean>('COOKIE_SECURE', false) ? 'none' : 'lax',
       path: '/',
     });
     return { success: true };
