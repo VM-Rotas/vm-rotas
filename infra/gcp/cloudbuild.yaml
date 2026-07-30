@@ -1,0 +1,37 @@
+substitutions:
+  _REGION: southamerica-east1
+  _REPOSITORY: vm-rotas
+  _API_IMAGE: api
+  _WEB_IMAGE: web
+  _NEXT_PUBLIC_API_URL: https://api.seudominio.com.br/api
+  _NEXT_PUBLIC_DEMO_MODE: 'false'
+  _NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY: ''
+  _NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID: DEMO_MAP_ID
+
+steps:
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=apps/api/Dockerfile
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_API_IMAGE}:${COMMIT_SHA}
+      - .
+
+  - id: build-web
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=apps/web/Dockerfile
+      - --build-arg=NEXT_PUBLIC_API_URL=${_NEXT_PUBLIC_API_URL}
+      - --build-arg=NEXT_PUBLIC_DEMO_MODE=${_NEXT_PUBLIC_DEMO_MODE}
+      - --build-arg=NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY=${_NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY}
+      - --build-arg=NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=${_NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID}
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_WEB_IMAGE}:${COMMIT_SHA}
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_API_IMAGE}:${COMMIT_SHA}
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_WEB_IMAGE}:${COMMIT_SHA}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

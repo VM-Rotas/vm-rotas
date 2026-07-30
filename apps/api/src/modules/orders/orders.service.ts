@@ -1,0 +1,361 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import type { AuthUser } from '../../common/types/auth-user';
+import { parseDateOnly } from '../../common/utils/date.utils';
+import { Prisma, type ServiceOrder } from '../../generated/prisma/client';
+import { MapsService } from '../maps/maps.service';
+import { PrismaService } from '../prisma/prisma.service';
+import type { CreateOrderDto } from './dto/create-order.dto';
+import type { ListOrdersQueryDto } from './dto/list-orders-query.dto';
+import type { UpdateOrderDto } from './dto/update-order.dto';
+
+@Injectable()
+export class OrdersService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly maps: MapsService,
+  ) {}
+
+  async list(user: AuthUser, query: ListOrdersQueryDto) {
+    const where: Prisma.ServiceOrderWhereInput = {
+      organizationId: user.organizationId,
+      ...(query.date ? { plannedDate: parseDateOnly(query.date) } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.priority ? { priority: query.priority } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { code: { contains: query.search, mode: 'insensitive' } },
+              { externalReference: { contains: query.search, mode: 'insensitive' } },
+              { recipientName: { contains: query.search, mode: 'insensitive' } },
+              { city: { contains: query.search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.serviceOrder.findMany({
+        where,
+        include: { customer: true },
+        orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+        take: query.take,
+        skip: query.skip,
+      }),
+      this.prisma.serviceOrder.count({ where }),
+    ]);
+
+    return { items, total };
+  }
+
+  async findOne(user: AuthUser, id: string) {
+    const order = await this.prisma.serviceOrder.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: {
+        customer: true,
+        routeStops: {
+          include: { routePlan: { include: { vehicle: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Ordem não encontrada.');
+    }
+    return order;
+  }
+
+  async create(user: AuthUser, dto: CreateOrderDto) {
+    this.assertCoordinatePair(dto.latitude, dto.longitude);
+    this.assertTimeWindow(dto.timeWindowStart, dto.timeWindowEnd);
+    const plannedDate = parseDateOnly(dto.plannedDate);
+    const address = this.formatAddress(dto);
+    const geocoded =
+      dto.latitude != null && dto.longitude != null
+        ? null
+        : await this.maps.geocode(address, false);
+    const code = dto.code?.trim() || this.generateOrderCode();
+
+    return this.prisma.$transaction(async (transaction) => {
+      const duplicate = await transaction.serviceOrder.findFirst({
+        where: { organizationId: user.organizationId, code },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new BadRequestException('Já existe uma ordem com este código.');
+      }
+
+      let customerId = dto.customerId;
+      if (customerId) {
+        const customer = await transaction.customer.findFirst({
+          where: { id: customerId, organizationId: user.organizationId },
+          select: { id: true },
+        });
+        if (!customer) {
+          throw new BadRequestException('Cliente inválido para esta organização.');
+        }
+      } else {
+        const customer = await transaction.customer.create({
+          data: {
+            organizationId: user.organizationId,
+            name: dto.customerName?.trim() || dto.recipientName.trim(),
+            phone: dto.recipientPhone?.trim() || null,
+          },
+        });
+        customerId = customer.id;
+      }
+
+      const created = await transaction.serviceOrder.create({
+        data: {
+          organizationId: user.organizationId,
+          customerId,
+          createdById: user.sub,
+          code,
+          externalReference: dto.externalReference?.trim() || null,
+          type: dto.type,
+          status: dto.status ?? 'READY',
+          priority: dto.priority ?? 'NORMAL',
+          plannedDate,
+          timeWindowStart: dto.timeWindowStart ? new Date(dto.timeWindowStart) : null,
+          timeWindowEnd: dto.timeWindowEnd ? new Date(dto.timeWindowEnd) : null,
+          serviceDurationMin: dto.serviceDurationMin ?? 10,
+          weightKg: dto.weightKg,
+          volumeM3: dto.volumeM3,
+          recipientName: dto.recipientName.trim(),
+          recipientPhone: dto.recipientPhone?.trim() || null,
+          addressLine: dto.addressLine.trim(),
+          addressNumber: dto.addressNumber?.trim() || null,
+          addressComplement: dto.addressComplement?.trim() || null,
+          neighborhood: dto.neighborhood?.trim() || null,
+          city: dto.city.trim(),
+          state: dto.state.trim().toUpperCase(),
+          postalCode: dto.postalCode?.trim() || null,
+          formattedAddress: geocoded?.formattedAddress ?? address,
+          latitude: dto.latitude ?? geocoded?.latitude,
+          longitude: dto.longitude ?? geocoded?.longitude,
+          notes: dto.notes?.trim() || null,
+        },
+        include: { customer: true },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          userId: user.sub,
+          action: 'ORDER_CREATED',
+          entityType: 'ServiceOrder',
+          entityId: created.id,
+          metadata: { code: created.code, priority: created.priority },
+        },
+      });
+
+      return created;
+    });
+  }
+
+  async update(user: AuthUser, id: string, dto: UpdateOrderDto) {
+    const existing = await this.findOne(user, id);
+    if (['COMPLETED', 'CANCELLED'].includes(existing.status)) {
+      throw new BadRequestException('Uma ordem concluída ou cancelada não pode ser alterada.');
+    }
+
+    this.assertCoordinatePair(dto.latitude, dto.longitude);
+    this.assertTimeWindow(
+      dto.timeWindowStart ?? existing.timeWindowStart?.toISOString(),
+      dto.timeWindowEnd ?? existing.timeWindowEnd?.toISOString(),
+    );
+
+    if (dto.customerId !== undefined) {
+      const customer = await this.prisma.customer.findFirst({
+        where: { id: dto.customerId, organizationId: user.organizationId },
+        select: { id: true },
+      });
+      if (!customer) {
+        throw new BadRequestException('Cliente inválido para esta organização.');
+      }
+    }
+    if (dto.code !== undefined && dto.code !== existing.code) {
+      const duplicate = await this.prisma.serviceOrder.findFirst({
+        where: {
+          organizationId: user.organizationId,
+          code: dto.code.trim(),
+          NOT: { id },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new BadRequestException('Já existe uma ordem com este código.');
+      }
+    }
+
+    const data: Prisma.ServiceOrderUncheckedUpdateInput = {};
+    const scalarFields = [
+      'code',
+      'externalReference',
+      'type',
+      'status',
+      'priority',
+      'serviceDurationMin',
+      'weightKg',
+      'volumeM3',
+      'recipientName',
+      'recipientPhone',
+      'addressLine',
+      'addressNumber',
+      'addressComplement',
+      'neighborhood',
+      'city',
+      'state',
+      'postalCode',
+      'notes',
+    ] as const;
+
+    for (const field of scalarFields) {
+      if (dto[field] !== undefined) {
+        (data as unknown as Record<string, unknown>)[field] = dto[field];
+      }
+    }
+
+    if (dto.customerId !== undefined) {
+      data.customerId = dto.customerId;
+    }
+    if (dto.plannedDate) {
+      data.plannedDate = parseDateOnly(dto.plannedDate);
+    }
+    if (dto.timeWindowStart !== undefined) {
+      data.timeWindowStart = dto.timeWindowStart ? new Date(dto.timeWindowStart) : null;
+    }
+    if (dto.timeWindowEnd !== undefined) {
+      data.timeWindowEnd = dto.timeWindowEnd ? new Date(dto.timeWindowEnd) : null;
+    }
+    if (dto.latitude !== undefined && dto.longitude !== undefined) {
+      data.latitude = dto.latitude;
+      data.longitude = dto.longitude;
+    }
+
+    const addressChanged = [
+      'addressLine',
+      'addressNumber',
+      'addressComplement',
+      'neighborhood',
+      'city',
+      'state',
+      'postalCode',
+    ].some((field) => dto[field as keyof UpdateOrderDto] !== undefined);
+
+    if (addressChanged) {
+      const merged = {
+        addressLine: dto.addressLine ?? existing.addressLine,
+        addressNumber: dto.addressNumber ?? existing.addressNumber ?? undefined,
+        addressComplement: dto.addressComplement ?? existing.addressComplement ?? undefined,
+        neighborhood: dto.neighborhood ?? existing.neighborhood ?? undefined,
+        city: dto.city ?? existing.city,
+        state: dto.state ?? existing.state,
+        postalCode: dto.postalCode ?? existing.postalCode ?? undefined,
+      };
+      const address = this.formatAddress(merged);
+      if (dto.latitude != null && dto.longitude != null) {
+        data.formattedAddress = address;
+      } else {
+        const geocoded = await this.maps.geocode(address, false);
+        data.formattedAddress = geocoded?.formattedAddress ?? address;
+        if (geocoded) {
+          data.latitude = geocoded.latitude;
+          data.longitude = geocoded.longitude;
+        } else {
+          data.latitude = null;
+          data.longitude = null;
+        }
+      }
+    }
+
+    return this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.serviceOrder.update({
+        where: { id },
+        data,
+        include: { customer: true },
+      });
+      await transaction.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          userId: user.sub,
+          action: 'ORDER_UPDATED',
+          entityType: 'ServiceOrder',
+          entityId: id,
+          metadata: { fields: Object.keys(dto) },
+        },
+      });
+      return updated;
+    });
+  }
+
+  async cancel(user: AuthUser, id: string): Promise<ServiceOrder> {
+    const existing = await this.findOne(user, id);
+    if (['IN_PROGRESS', 'COMPLETED'].includes(existing.status)) {
+      throw new BadRequestException('Não é possível cancelar uma ordem em execução ou concluída.');
+    }
+
+    return this.prisma.$transaction(async (transaction) => {
+      const cancelled = await transaction.serviceOrder.update({
+        where: { id },
+        data: { status: 'CANCELLED' },
+      });
+      await transaction.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          userId: user.sub,
+          action: 'ORDER_CANCELLED',
+          entityType: 'ServiceOrder',
+          entityId: id,
+          metadata: { code: cancelled.code },
+        },
+      });
+      return cancelled;
+    });
+  }
+
+  private generateOrderCode(): string {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const suffix = randomUUID().slice(0, 4).toUpperCase();
+    return `VM-${timestamp}-${suffix}`;
+  }
+
+  private assertCoordinatePair(latitude?: number, longitude?: number): void {
+    if ((latitude == null) !== (longitude == null)) {
+      throw new BadRequestException('Informe latitude e longitude em conjunto.');
+    }
+  }
+
+  private assertTimeWindow(start?: string, end?: string): void {
+    if (!start || !end) return;
+    if (new Date(start).getTime() >= new Date(end).getTime()) {
+      throw new BadRequestException('O início da janela deve ser anterior ao fim.');
+    }
+  }
+
+  private formatAddress(dto: {
+    addressLine: string;
+    addressNumber?: string | null;
+    addressComplement?: string | null;
+    neighborhood?: string | null;
+    city: string;
+    state: string;
+    postalCode?: string | null;
+  }): string {
+    return [
+      [dto.addressLine, dto.addressNumber].filter(Boolean).join(', '),
+      dto.addressComplement,
+      dto.neighborhood,
+      `${dto.city} - ${dto.state}`,
+      dto.postalCode,
+      'Brasil',
+    ]
+      .filter(Boolean)
+      .join(', ');
+  }
+}
