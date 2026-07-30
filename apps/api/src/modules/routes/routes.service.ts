@@ -128,8 +128,6 @@ export class RoutesService {
 
     const context = this.buildContext(routeDate, depot, eligibleOrders, vehicles);
     const requestedProvider = dto.provider ?? undefined;
-    const recalculationProvider =
-      dto.provider ?? (route.provider === 'GOOGLE' ? 'google' : 'local');
     const run = await this.prisma.optimizationRun.create({
       data: {
         organizationId: user.organizationId,
@@ -224,6 +222,9 @@ export class RoutesService {
     if (hasLatitude !== hasLongitude) {
       throw new BadRequestException('Informe latitude e longitude atuais em conjunto.');
     }
+
+    const recalculationProvider =
+      dto.provider ?? (route.provider === 'GOOGLE' ? 'google' : 'local');
 
     const remainingOrders = route.stops
       .filter(
