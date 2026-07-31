@@ -10,6 +10,7 @@ export interface AppEnvironment {
   ROUTE_OPTIMIZATION_PROVIDER: 'local' | 'google';
   LOCAL_AVG_SPEED_KMH: number;
   GOOGLE_MAPS_SERVER_API_KEY?: string;
+  GEOAPIFY_API_KEY?: string;
   GOOGLE_CLOUD_PROJECT_ID?: string;
   GOOGLE_ROUTE_OPTIMIZATION_ENABLED: boolean;
   ADDRESS_SEARCH_BASE_URL: string;
@@ -72,6 +73,7 @@ export function validateEnvironment(config: Record<string, unknown>): AppEnviron
     ROUTE_OPTIMIZATION_PROVIDER: provider as AppEnvironment['ROUTE_OPTIMIZATION_PROVIDER'],
     LOCAL_AVG_SPEED_KMH: speed,
     GOOGLE_MAPS_SERVER_API_KEY: String(config.GOOGLE_MAPS_SERVER_API_KEY ?? '').trim() || undefined,
+    GEOAPIFY_API_KEY: String(config.GEOAPIFY_API_KEY ?? '').trim() || undefined,
     GOOGLE_CLOUD_PROJECT_ID: String(config.GOOGLE_CLOUD_PROJECT_ID ?? '').trim() || undefined,
     GOOGLE_ROUTE_OPTIMIZATION_ENABLED:
       String(config.GOOGLE_ROUTE_OPTIMIZATION_ENABLED ?? 'false').toLowerCase() === 'true',

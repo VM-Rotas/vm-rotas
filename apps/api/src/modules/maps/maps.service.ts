@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -15,6 +15,32 @@ interface GoogleGeocodeResponse {
       };
     };
   }>;
+}
+
+interface GeoapifyResult {
+  name?: string;
+  country?: string;
+  country_code?: string;
+  state?: string;
+  state_code?: string;
+  county?: string;
+  city?: string;
+  postcode?: string;
+  district?: string;
+  suburb?: string;
+  quarter?: string;
+  street?: string;
+  housenumber?: string;
+  lon?: number;
+  lat?: number;
+  formatted?: string;
+  address_line1?: string;
+  address_line2?: string;
+  place_id?: string;
+}
+
+interface GeoapifyResponse {
+  results?: GeoapifyResult[];
 }
 
 interface PhotonFeature {
@@ -55,7 +81,7 @@ export interface AddressSuggestion {
   neighborhood?: string;
   state?: string;
   postalCode?: string;
-  source: 'HISTORY' | 'OPENSTREETMAP';
+  source: 'HISTORY' | 'GEOAPIFY' | 'OPENSTREETMAP';
 }
 
 export interface GeocodedAddress {
@@ -106,7 +132,8 @@ const BRAZIL_STATE_CODES: Record<string, string> = {
 
 @Injectable()
 export class MapsService {
-  private readonly photonCache = new Map<string, CacheEntry>();
+  private readonly logger = new Logger(MapsService.name);
+  private readonly suggestionCache = new Map<string, CacheEntry>();
 
   constructor(
     private readonly config: ConfigService,
@@ -129,49 +156,68 @@ export class MapsService {
     const history = await this.historySuggestions(organizationId, query, limit);
     if (history.length >= limit) return history.slice(0, limit);
 
-    let remote: AddressSuggestion[] = [];
-    try {
-      remote = await this.photonSuggestions(query, Math.min(8, limit + 2));
-    } catch {
-      // O cadastro continua funcionando manualmente quando o serviço gratuito está indisponível.
-    }
+    const remaining = Math.max(1, limit - history.length);
+    const remote = await this.remoteSuggestions(query, Math.min(8, remaining + 2));
 
     return this.dedupeSuggestions([...history, ...remote]).slice(0, limit);
   }
 
   async geocode(address: string, required = true): Promise<GeocodedAddress | null> {
-    const apiKey = this.config.get<string>('GOOGLE_MAPS_SERVER_API_KEY');
-    if (apiKey) {
-      return this.googleGeocode(address, apiKey, required);
+    const normalizedAddress = this.normalizeQuery(address);
+    const googleApiKey = this.config.get<string>('GOOGLE_MAPS_SERVER_API_KEY');
+    if (googleApiKey) {
+      return this.googleGeocode(normalizedAddress, googleApiKey, required);
+    }
+
+    const geoapifyApiKey = this.config.get<string>('GEOAPIFY_API_KEY')?.trim();
+    if (geoapifyApiKey) {
+      try {
+        const result = (await this.geoapifySuggestions(normalizedAddress, 1, geoapifyApiKey))[0];
+        if (result) return this.suggestionToGeocodedAddress(result);
+      } catch (error) {
+        this.logger.warn(`Geoapify não respondeu ao geocodificar: ${this.errorMessage(error)}`);
+      }
     }
 
     try {
-      const result = (await this.photonSuggestions(this.normalizeQuery(address), 1))[0];
-      if (result) {
-        return {
-          latitude: result.latitude,
-          longitude: result.longitude,
-          formattedAddress: result.label,
-          placeId: result.id,
-          city: result.city,
-          neighborhood: result.neighborhood,
-          state: result.state,
-          postalCode: result.postalCode,
-        };
-      }
-    } catch {
+      const result = (await this.photonSuggestions(normalizedAddress, 1))[0];
+      if (result) return this.suggestionToGeocodedAddress(result);
+    } catch (error) {
+      this.logger.warn(`Photon não respondeu ao geocodificar: ${this.errorMessage(error)}`);
       if (required) {
         throw new ServiceUnavailableException(
-          'A busca gratuita de endereço está temporariamente indisponível. Tente novamente.',
+          'Não foi possível localizar o endereço agora. Digite rua, número e cidade e tente novamente.',
         );
       }
       return null;
     }
 
     if (required) {
-      throw new ServiceUnavailableException('Endereço não encontrado. Informe mais detalhes.');
+      throw new ServiceUnavailableException(
+        'Endereço não encontrado. Informe rua, número e cidade.',
+      );
     }
     return null;
+  }
+
+  private async remoteSuggestions(query: string, limit: number): Promise<AddressSuggestion[]> {
+    const geoapifyApiKey = this.config.get<string>('GEOAPIFY_API_KEY')?.trim();
+
+    if (geoapifyApiKey) {
+      try {
+        const geoapifyResults = await this.geoapifySuggestions(query, limit, geoapifyApiKey);
+        if (geoapifyResults.length > 0) return geoapifyResults;
+      } catch (error) {
+        this.logger.warn(`Geoapify autocomplete falhou: ${this.errorMessage(error)}`);
+      }
+    }
+
+    try {
+      return await this.photonSuggestions(query, limit);
+    } catch (error) {
+      this.logger.warn(`Photon autocomplete falhou: ${this.errorMessage(error)}`);
+      return [];
+    }
   }
 
   private async googleGeocode(
@@ -280,11 +326,104 @@ export class MapsService {
     return this.dedupeSuggestions(suggestions).slice(0, limit);
   }
 
+  private async geoapifySuggestions(
+    query: string,
+    limit: number,
+    apiKey: string,
+  ): Promise<AddressSuggestion[]> {
+    if (query.length < 3) return [];
+
+    const cacheKey = `geoapify|${query.toLocaleLowerCase('pt-BR')}|${limit}`;
+    const cached = this.suggestionCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const lat = this.config.get<number>('ADDRESS_SEARCH_LAT', -23.865);
+    const lon = this.config.get<number>('ADDRESS_SEARCH_LON', -51.856);
+    const params = new URLSearchParams({
+      text: query,
+      format: 'json',
+      limit: String(Math.max(1, Math.min(limit, 8))),
+      lang: 'pt',
+      filter: 'countrycode:br',
+      bias: `proximity:${lon},${lat}`,
+      apiKey,
+    });
+
+    const response = await fetch(
+      `https://api.geoapify.com/v1/geocode/autocomplete?${params.toString()}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+        },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+
+    if (!response.ok) {
+      throw new ServiceUnavailableException(
+        `Geoapify respondeu com HTTP ${response.status}.`,
+      );
+    }
+
+    const payload = (await response.json()) as GeoapifyResponse;
+    const value = this.dedupeSuggestions(
+      (payload.results ?? []).flatMap((result) => this.geoapifyResultToSuggestion(result)),
+    ).slice(0, limit);
+
+    this.storeCache(cacheKey, value);
+    return value;
+  }
+
+  private geoapifyResultToSuggestion(result: GeoapifyResult): AddressSuggestion[] {
+    const latitude = Number(result.lat);
+    const longitude = Number(result.lon);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
+
+    const streetLine = [result.street, result.housenumber].filter(Boolean).join(', ');
+    const primaryText =
+      result.address_line1?.trim() ||
+      streetLine ||
+      result.name?.trim() ||
+      result.formatted?.trim() ||
+      result.city?.trim() ||
+      'Endereço encontrado';
+    const secondaryText =
+      result.address_line2?.trim() ||
+      this.uniqueParts([
+        result.suburb,
+        result.district,
+        result.city,
+        result.state,
+        result.postcode,
+        result.country,
+      ]).join(', ');
+    const label =
+      result.formatted?.trim() ||
+      this.uniqueParts([primaryText, secondaryText]).join(', ');
+
+    return [
+      {
+        id: `geoapify:${result.place_id ?? `${latitude}:${longitude}`}`,
+        label,
+        primaryText,
+        secondaryText: secondaryText || undefined,
+        latitude,
+        longitude,
+        city: result.city || result.county,
+        neighborhood: result.suburb || result.district || result.quarter,
+        state: this.normalizeBrazilState(result.state_code || result.state),
+        postalCode: result.postcode,
+        source: 'GEOAPIFY',
+      },
+    ];
+  }
+
   private async photonSuggestions(query: string, limit: number): Promise<AddressSuggestion[]> {
     if (query.length < 3) return [];
 
-    const cacheKey = `${query.toLocaleLowerCase('pt-BR')}|${limit}`;
-    const cached = this.photonCache.get(cacheKey);
+    const cacheKey = `photon|${query.toLocaleLowerCase('pt-BR')}|${limit}`;
+    const cached = this.suggestionCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
 
     const baseUrl = this.config.get<string>(
@@ -307,13 +446,13 @@ export class MapsService {
       headers: {
         Accept: 'application/geo+json, application/json',
         'Accept-Language': 'pt-BR,pt;q=0.9',
-        'User-Agent': 'VM-Rotas/0.4 address-search',
+        'User-Agent': 'VM-Rotas/0.5 internal-address-search',
       },
       signal: AbortSignal.timeout(8_000),
     });
 
     if (!response.ok) {
-      throw new ServiceUnavailableException('Falha ao consultar sugestões de endereço.');
+      throw new ServiceUnavailableException(`Photon respondeu com HTTP ${response.status}.`);
     }
 
     const payload = (await response.json()) as PhotonResponse;
@@ -321,11 +460,7 @@ export class MapsService {
       (payload.features ?? []).flatMap((feature) => this.photonFeatureToSuggestion(feature)),
     ).slice(0, limit);
 
-    this.photonCache.set(cacheKey, {
-      expiresAt: Date.now() + 30 * 60 * 1_000,
-      value,
-    });
-    this.trimCache();
+    this.storeCache(cacheKey, value);
     return value;
   }
 
@@ -388,6 +523,19 @@ export class MapsService {
     ];
   }
 
+  private suggestionToGeocodedAddress(suggestion: AddressSuggestion): GeocodedAddress {
+    return {
+      latitude: suggestion.latitude,
+      longitude: suggestion.longitude,
+      formattedAddress: suggestion.label,
+      placeId: suggestion.id,
+      city: suggestion.city,
+      neighborhood: suggestion.neighborhood,
+      state: suggestion.state,
+      postalCode: suggestion.postalCode,
+    };
+  }
+
   private dedupeSuggestions(suggestions: AddressSuggestion[]): AddressSuggestion[] {
     const seen = new Set<string>();
     const result: AddressSuggestion[] = [];
@@ -435,9 +583,21 @@ export class MapsService {
     return value.trim().replace(/\s+/g, ' ');
   }
 
+  private storeCache(key: string, value: AddressSuggestion[]): void {
+    this.suggestionCache.set(key, {
+      expiresAt: Date.now() + 30 * 60 * 1_000,
+      value,
+    });
+    this.trimCache();
+  }
+
   private trimCache(): void {
-    if (this.photonCache.size <= 150) return;
-    const oldestKeys = [...this.photonCache.keys()].slice(0, 50);
-    oldestKeys.forEach((key) => this.photonCache.delete(key));
+    if (this.suggestionCache.size <= 150) return;
+    const oldestKeys = [...this.suggestionCache.keys()].slice(0, 50);
+    oldestKeys.forEach((key) => this.suggestionCache.delete(key));
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }
