@@ -18,6 +18,9 @@ interface MissionPointInput {
   type: 'PICKUP' | 'DELIVERY';
   name: string;
   address: string;
+  addressNumber: string;
+  addressComplement?: string;
+  postalCode?: string;
   formattedAddress?: string;
   latitude?: number;
   longitude?: number;
@@ -92,6 +95,9 @@ export class OrdersService {
       name: dto.pickupName,
       address: dto.pickupAddress,
       formattedAddress: dto.pickupFormattedAddress,
+      addressNumber: dto.pickupAddressNumber,
+      addressComplement: dto.pickupAddressComplement,
+      postalCode: dto.pickupPostalCode,
       latitude: dto.pickupLatitude,
       longitude: dto.pickupLongitude,
       city: dto.pickupCity,
@@ -104,6 +110,9 @@ export class OrdersService {
       name: dto.deliveryName,
       address: dto.deliveryAddress,
       formattedAddress: dto.deliveryFormattedAddress,
+      addressNumber: dto.deliveryAddressNumber,
+      addressComplement: dto.deliveryAddressComplement,
+      postalCode: dto.deliveryPostalCode,
       latitude: dto.deliveryLatitude,
       longitude: dto.deliveryLongitude,
       city: dto.deliveryCity,
@@ -125,8 +134,12 @@ export class OrdersService {
     const geocodedPoints = await Promise.all(
       points.map(async (point) => ({
         point,
-        geocoded:
-          point.latitude != null && point.longitude != null
+        // O ponto selecionado no autocomplete normalmente representa a rua.
+        // Depois que o usuário informa o número, geocodificamos novamente o
+        // endereço completo para obter a melhor coordenada disponível.
+        geocoded: point.addressNumber
+          ? await this.tryGeocode(this.missionSearchAddress(point))
+          : point.latitude != null && point.longitude != null
             ? {
                 latitude: point.latitude,
                 longitude: point.longitude,
@@ -135,6 +148,7 @@ export class OrdersService {
                 city: point.city,
                 neighborhood: point.neighborhood,
                 state: point.state,
+                postalCode: point.postalCode,
               }
             : await this.tryGeocode(this.missionSearchAddress(point)),
       })),
@@ -173,15 +187,17 @@ export class OrdersService {
             serviceDurationMin: 10,
             recipientName: point.name.trim(),
             addressLine: point.address.trim(),
+            addressNumber: point.addressNumber.trim(),
+            addressComplement: point.addressComplement?.trim() || null,
             neighborhood: location.neighborhood?.trim() || null,
             city: location.city,
             state: location.state,
+            postalCode: point.postalCode?.trim() || geocoded?.postalCode || null,
             formattedAddress:
-              point.formattedAddress ??
               geocoded?.formattedAddress ??
               this.missionSearchAddress(point),
-            latitude: point.latitude ?? geocoded?.latitude,
-            longitude: point.longitude ?? geocoded?.longitude,
+            latitude: geocoded?.latitude ?? point.latitude,
+            longitude: geocoded?.longitude ?? point.longitude,
             notes: this.buildMissionNotes(point.item, dto.notes),
           },
         });
@@ -507,6 +523,9 @@ export class OrdersService {
       name?: string;
       address?: string;
       formattedAddress?: string;
+      addressNumber?: string;
+      addressComplement?: string;
+      postalCode?: string;
       latitude?: number;
       longitude?: number;
       city?: string;
@@ -524,12 +543,13 @@ export class OrdersService {
     if (
       !values.name?.trim() ||
       !values.address?.trim() ||
+      !values.addressNumber?.trim() ||
       !values.city?.trim() ||
       !values.item?.trim()
     ) {
       const label = type === 'PICKUP' ? 'coleta' : 'entrega';
       throw new BadRequestException(
-        `Preencha nome/local, endereço, cidade e o que será feito na ${label}.`,
+        `Preencha nome/local, endereço, número, cidade e o que será feito na ${label}.`,
       );
     }
 
@@ -544,6 +564,9 @@ export class OrdersService {
       type,
       name: values.name.trim(),
       address: values.address.trim(),
+      addressNumber: values.addressNumber!.trim(),
+      addressComplement: values.addressComplement?.trim() || undefined,
+      postalCode: values.postalCode?.trim() || undefined,
       formattedAddress: values.formattedAddress?.trim() || undefined,
       latitude: values.latitude,
       longitude: values.longitude,
@@ -557,9 +580,11 @@ export class OrdersService {
 
   private missionSearchAddress(point: MissionPointInput): string {
     return [
-      point.address,
+      [point.address, point.addressNumber].filter(Boolean).join(', '),
+      point.addressComplement,
       point.neighborhood,
       `${point.city} - ${point.state ?? 'PR'}`,
+      point.postalCode,
       'Brasil',
     ]
       .filter(Boolean)

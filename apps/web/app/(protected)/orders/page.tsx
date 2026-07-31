@@ -17,6 +17,9 @@ interface MissionForm {
   pickupName: string;
   pickupAddress: string;
   pickupFormattedAddress: string;
+  pickupAddressNumber: string;
+  pickupAddressComplement: string;
+  pickupPostalCode: string;
   pickupLatitude?: number;
   pickupLongitude?: number;
   pickupCity: string;
@@ -28,6 +31,9 @@ interface MissionForm {
   deliveryName: string;
   deliveryAddress: string;
   deliveryFormattedAddress: string;
+  deliveryAddressNumber: string;
+  deliveryAddressComplement: string;
+  deliveryPostalCode: string;
   deliveryLatitude?: number;
   deliveryLongitude?: number;
   deliveryCity: string;
@@ -54,6 +60,9 @@ const initialForm: MissionForm = {
   pickupName: '',
   pickupAddress: '',
   pickupFormattedAddress: '',
+  pickupAddressNumber: '',
+  pickupAddressComplement: '',
+  pickupPostalCode: '',
   pickupLatitude: undefined,
   pickupLongitude: undefined,
   pickupCity: '',
@@ -65,6 +74,9 @@ const initialForm: MissionForm = {
   deliveryName: '',
   deliveryAddress: '',
   deliveryFormattedAddress: '',
+  deliveryAddressNumber: '',
+  deliveryAddressComplement: '',
+  deliveryPostalCode: '',
   deliveryLatitude: undefined,
   deliveryLongitude: undefined,
   deliveryCity: '',
@@ -143,16 +155,24 @@ function validCoordinates(order: ServiceOrder): { latitude: number; longitude: n
 }
 
 function navigationDestination(order: ServiceOrder): string {
-  const coordinates = validCoordinates(order);
-  if (coordinates) return `${coordinates.latitude},${coordinates.longitude}`;
-  return [
-    order.formattedAddress || order.addressLine,
+  const fullAddress = [
+    [order.addressLine, order.addressNumber].filter(Boolean).join(', '),
+    order.addressComplement,
     order.neighborhood,
     order.city,
     order.state,
+    order.postalCode,
   ]
     .filter(Boolean)
     .join(', ');
+
+  // Quando existe número, enviamos o endereço completo ao aplicativo de GPS.
+  // Isso é mais confiável do que usar a coordenada aproximada do centro da rua.
+  if (order.addressNumber) return fullAddress;
+
+  const coordinates = validCoordinates(order);
+  if (coordinates) return `${coordinates.latitude},${coordinates.longitude}`;
+  return fullAddress || order.formattedAddress || order.addressLine;
 }
 
 function googleMapsUrl(order: ServiceOrder): string {
@@ -183,7 +203,7 @@ function MissionStop({ order, type }: { order: ServiceOrder; type: 'pickup' | 'd
       <div className="mission-stop-address">
         <Icon name="pin" />
         <span>
-          {order.addressLine}
+          {[order.addressLine, order.addressNumber].filter(Boolean).join(', ')}
           <small>{locationLine}</small>
         </span>
       </div>
@@ -264,8 +284,12 @@ export default function OrdersPage() {
       ...current,
       pickupAddress: value,
       pickupFormattedAddress: '',
+  pickupAddressNumber: '',
+  pickupAddressComplement: '',
+  pickupPostalCode: '',
       pickupLatitude: undefined,
       pickupLongitude: undefined,
+      pickupPostalCode: '',
     }));
   }
 
@@ -279,6 +303,7 @@ export default function OrdersPage() {
       pickupCity: suggestion.city ?? current.pickupCity,
       pickupNeighborhood: suggestion.neighborhood ?? current.pickupNeighborhood,
       pickupState: suggestion.state ?? current.pickupState,
+      pickupPostalCode: suggestion.postalCode ?? '',
     }));
   }
 
@@ -287,8 +312,12 @@ export default function OrdersPage() {
       ...current,
       deliveryAddress: value,
       deliveryFormattedAddress: '',
+  deliveryAddressNumber: '',
+  deliveryAddressComplement: '',
+  deliveryPostalCode: '',
       deliveryLatitude: undefined,
       deliveryLongitude: undefined,
+      deliveryPostalCode: '',
     }));
   }
 
@@ -302,6 +331,7 @@ export default function OrdersPage() {
       deliveryCity: suggestion.city ?? current.deliveryCity,
       deliveryNeighborhood: suggestion.neighborhood ?? current.deliveryNeighborhood,
       deliveryState: suggestion.state ?? current.deliveryState,
+      deliveryPostalCode: suggestion.postalCode ?? '',
     }));
   }
 
@@ -326,6 +356,9 @@ export default function OrdersPage() {
                 pickupName: form.pickupName,
                 pickupAddress: form.pickupAddress,
                 pickupFormattedAddress: form.pickupFormattedAddress || undefined,
+                pickupAddressNumber: form.pickupAddressNumber,
+                pickupAddressComplement: form.pickupAddressComplement || undefined,
+                pickupPostalCode: form.pickupPostalCode || undefined,
                 pickupLatitude: form.pickupLatitude,
                 pickupLongitude: form.pickupLongitude,
                 pickupCity: form.pickupCity,
@@ -340,6 +373,9 @@ export default function OrdersPage() {
                 deliveryName: form.deliveryName,
                 deliveryAddress: form.deliveryAddress,
                 deliveryFormattedAddress: form.deliveryFormattedAddress || undefined,
+                deliveryAddressNumber: form.deliveryAddressNumber,
+                deliveryAddressComplement: form.deliveryAddressComplement || undefined,
+                deliveryPostalCode: form.deliveryPostalCode || undefined,
                 deliveryLatitude: form.deliveryLatitude,
                 deliveryLongitude: form.deliveryLongitude,
                 deliveryCity: form.deliveryCity,
@@ -479,6 +515,11 @@ export default function OrdersPage() {
                   placeholder="Rua, número ou nome do local"
                 />
                 <div className="form-row mission-location-row">
+                  <label className="field"><span>Número</span><input required value={form.pickupAddressNumber} onChange={(event) => setForm((current) => ({ ...current, pickupAddressNumber: event.target.value, pickupLatitude: undefined, pickupLongitude: undefined }))} placeholder="Ex.: 350 ou s/n" /></label>
+                  <label className="field"><span>Complemento <small>(opcional)</small></span><input value={form.pickupAddressComplement} onChange={(event) => setForm((current) => ({ ...current, pickupAddressComplement: event.target.value }))} placeholder="Ex.: Fundos, portão azul" /></label>
+                </div>
+                <div className="form-hint compact"><Icon name="pin" />Ao salvar, o sistema localizará novamente o endereço completo com o número.</div>
+                <div className="form-row mission-location-row">
                   <label className="field"><span>Cidade</span><input required value={form.pickupCity} onChange={(event) => setForm((current) => ({ ...current, pickupCity: event.target.value }))} placeholder="Ex.: Marialva" /></label>
                   <label className="field"><span>Bairro <small>(opcional)</small></span><input value={form.pickupNeighborhood} onChange={(event) => setForm((current) => ({ ...current, pickupNeighborhood: event.target.value }))} placeholder="Ex.: Centro" /></label>
                 </div>
@@ -506,6 +547,11 @@ export default function OrdersPage() {
                   onSelect={selectDeliveryAddress}
                   placeholder="Rua, número ou nome do local"
                 />
+                <div className="form-row mission-location-row">
+                  <label className="field"><span>Número</span><input required value={form.deliveryAddressNumber} onChange={(event) => setForm((current) => ({ ...current, deliveryAddressNumber: event.target.value, deliveryLatitude: undefined, deliveryLongitude: undefined }))} placeholder="Ex.: 120 ou s/n" /></label>
+                  <label className="field"><span>Complemento <small>(opcional)</small></span><input value={form.deliveryAddressComplement} onChange={(event) => setForm((current) => ({ ...current, deliveryAddressComplement: event.target.value }))} placeholder="Ex.: Barracão dos fundos" /></label>
+                </div>
+                <div className="form-hint compact"><Icon name="pin" />Ao salvar, o sistema localizará novamente o endereço completo com o número.</div>
                 <div className="form-row mission-location-row">
                   <label className="field"><span>Cidade</span><input required value={form.deliveryCity} onChange={(event) => setForm((current) => ({ ...current, deliveryCity: event.target.value }))} placeholder="Ex.: Maringá" /></label>
                   <label className="field"><span>Bairro <small>(opcional)</small></span><input value={form.deliveryNeighborhood} onChange={(event) => setForm((current) => ({ ...current, deliveryNeighborhood: event.target.value }))} placeholder="Ex.: Centro" /></label>

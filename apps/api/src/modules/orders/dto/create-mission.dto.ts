@@ -39,6 +39,22 @@ export class CreateMissionDto {
   @MinLength(5)
   pickupAddress?: string;
 
+  @ApiPropertyOptional({ example: '350' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  pickupAddressNumber?: string;
+
+  @ApiPropertyOptional({ example: 'Fundos, portão azul' })
+  @IsOptional()
+  @IsString()
+  pickupAddressComplement?: string;
+
+  @ApiPropertyOptional({ example: '86990-000' })
+  @IsOptional()
+  @IsString()
+  pickupPostalCode?: string;
+
   @ApiPropertyOptional({ example: 'Rua Exemplo, 120, Centro, Marialva, Paraná, Brasil' })
   @IsOptional()
   @IsString()
@@ -100,6 +116,22 @@ export class CreateMissionDto {
   @IsString()
   @MinLength(5)
   deliveryAddress?: string;
+
+  @ApiPropertyOptional({ example: '120' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  deliveryAddressNumber?: string;
+
+  @ApiPropertyOptional({ example: 'Barracão dos fundos' })
+  @IsOptional()
+  @IsString()
+  deliveryAddressComplement?: string;
+
+  @ApiPropertyOptional({ example: '87000-000' })
+  @IsOptional()
+  @IsString()
+  deliveryPostalCode?: string;
 
   @ApiPropertyOptional({ example: 'Avenida Brasil, 350, Centro, Marialva, Paraná, Brasil' })
   @IsOptional()
