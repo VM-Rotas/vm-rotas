@@ -3,7 +3,6 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import type { AuthUser } from '../../common/types/auth-user';
-import { AddressSuggestionsQueryDto } from './dto/address-suggestions-query.dto';
 import { GeocodeDto } from './dto/geocode.dto';
 import {
   MapsService,
@@ -17,13 +16,16 @@ export class MapsController {
   constructor(private readonly maps: MapsService) {}
 
   @Get('address-suggestions')
-  @Roles('OWNER', 'ADMIN', 'DISPATCHER')
-  @ApiOperation({ summary: 'Sugere endereços já usados e resultados do OpenStreetMap' })
+  @ApiOperation({ summary: 'Sugere endereços enquanto o usuário digita' })
   addressSuggestions(
     @CurrentUser() user: AuthUser,
-    @Query() query: AddressSuggestionsQueryDto,
+    @Query('query') query = '',
+    @Query('limit') rawLimit = '6',
   ): Promise<AddressSuggestion[]> {
-    return this.maps.addressSuggestions(user.organizationId, query.query, query.limit);
+    const parsedLimit = Number.parseInt(rawLimit, 10);
+    const limit = Number.isFinite(parsedLimit) ? parsedLimit : 6;
+
+    return this.maps.addressSuggestions(user.organizationId, query, limit);
   }
 
   @Post('geocode')
