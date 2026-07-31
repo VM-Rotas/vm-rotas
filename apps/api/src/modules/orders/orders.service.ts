@@ -18,6 +18,11 @@ interface MissionPointInput {
   type: 'PICKUP' | 'DELIVERY';
   name: string;
   address: string;
+  formattedAddress?: string;
+  latitude?: number;
+  longitude?: number;
+  city?: string;
+  state?: string;
   item: string;
   time?: string;
 }
@@ -85,12 +90,22 @@ export class OrdersService {
     const pickup = this.buildMissionPoint('PICKUP', {
       name: dto.pickupName,
       address: dto.pickupAddress,
+      formattedAddress: dto.pickupFormattedAddress,
+      latitude: dto.pickupLatitude,
+      longitude: dto.pickupLongitude,
+      city: dto.pickupCity,
+      state: dto.pickupState,
       item: dto.pickupItem,
       time: dto.pickupTime,
     });
     const delivery = this.buildMissionPoint('DELIVERY', {
       name: dto.deliveryName,
       address: dto.deliveryAddress,
+      formattedAddress: dto.deliveryFormattedAddress,
+      latitude: dto.deliveryLatitude,
+      longitude: dto.deliveryLongitude,
+      city: dto.deliveryCity,
+      state: dto.deliveryState,
       item: dto.deliveryItem,
       time: dto.deliveryTime,
     });
@@ -107,7 +122,17 @@ export class OrdersService {
     const geocodedPoints = await Promise.all(
       points.map(async (point) => ({
         point,
-        geocoded: await this.tryGeocode(point.address),
+        geocoded:
+          point.latitude != null && point.longitude != null
+            ? {
+                latitude: point.latitude,
+                longitude: point.longitude,
+                formattedAddress: point.formattedAddress ?? point.address,
+                placeId: 'selected-address',
+                city: point.city,
+                state: point.state,
+              }
+            : await this.tryGeocode(point.address),
       })),
     );
 
@@ -115,7 +140,13 @@ export class OrdersService {
       const created: ServiceOrder[] = [];
 
       for (const { point, geocoded } of geocodedPoints) {
-        const location = this.inferCityAndState(point.address);
+        const inferredLocation = this.inferCityAndState(
+          point.formattedAddress ?? geocoded?.formattedAddress ?? point.address,
+        );
+        const location = {
+          city: point.city ?? geocoded?.city ?? inferredLocation.city,
+          state: (point.state ?? geocoded?.state ?? inferredLocation.state).toUpperCase(),
+        };
         const typeSuffix = point.type === 'PICKUP' ? 'C' : 'E';
         const timeWindowStart = this.missionDateTime(dto.plannedDate, point.time);
         const timeWindowEnd = timeWindowStart
@@ -139,9 +170,10 @@ export class OrdersService {
             addressLine: point.address.trim(),
             city: location.city,
             state: location.state,
-            formattedAddress: geocoded?.formattedAddress ?? point.address.trim(),
-            latitude: geocoded?.latitude,
-            longitude: geocoded?.longitude,
+            formattedAddress:
+              point.formattedAddress ?? geocoded?.formattedAddress ?? point.address.trim(),
+            latitude: point.latitude ?? geocoded?.latitude,
+            longitude: point.longitude ?? geocoded?.longitude,
             notes: this.buildMissionNotes(point.item, dto.notes),
           },
         });
@@ -466,6 +498,11 @@ export class OrdersService {
     values: {
       name?: string;
       address?: string;
+      formattedAddress?: string;
+      latitude?: number;
+      longitude?: number;
+      city?: string;
+      state?: string;
       item?: string;
       time?: string;
     },
@@ -482,10 +519,22 @@ export class OrdersService {
       );
     }
 
+    if ((values.latitude == null) !== (values.longitude == null)) {
+      const label = type === 'PICKUP' ? 'coleta' : 'entrega';
+      throw new BadRequestException(
+        `Selecione novamente o endereço da ${label} para confirmar a localização.`,
+      );
+    }
+
     return {
       type,
       name: values.name.trim(),
       address: values.address.trim(),
+      formattedAddress: values.formattedAddress?.trim() || undefined,
+      latitude: values.latitude,
+      longitude: values.longitude,
+      city: values.city?.trim() || undefined,
+      state: values.state?.trim().toUpperCase() || undefined,
       item: values.item.trim(),
       time: values.time?.trim() || undefined,
     };

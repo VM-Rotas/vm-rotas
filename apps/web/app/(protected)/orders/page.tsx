@@ -1,5 +1,6 @@
 'use client';
 
+import { AddressAutocomplete } from '@/components/address-autocomplete';
 import { useAuth } from '@/components/auth-provider';
 import { EmptyState, ErrorBanner, LoadingBlock, SuccessBanner } from '@/components/feedback';
 import { Icon } from '@/components/icons';
@@ -7,7 +8,7 @@ import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { api, ApiError, queryString } from '@/lib/api';
 import { formatTime, todayDateInput } from '@/lib/format';
-import type { OrderPriority, OrderStatus, ServiceOrder } from '@/lib/types';
+import type { AddressSuggestion, OrderPriority, OrderStatus, ServiceOrder } from '@/lib/types';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
 interface MissionForm {
@@ -15,11 +16,21 @@ interface MissionForm {
   hasPickup: boolean;
   pickupName: string;
   pickupAddress: string;
+  pickupFormattedAddress: string;
+  pickupLatitude?: number;
+  pickupLongitude?: number;
+  pickupCity: string;
+  pickupState: string;
   pickupItem: string;
   pickupTime: string;
   hasDelivery: boolean;
   deliveryName: string;
   deliveryAddress: string;
+  deliveryFormattedAddress: string;
+  deliveryLatitude?: number;
+  deliveryLongitude?: number;
+  deliveryCity: string;
+  deliveryState: string;
   deliveryItem: string;
   deliveryTime: string;
   notes: string;
@@ -40,11 +51,21 @@ const initialForm: MissionForm = {
   hasPickup: true,
   pickupName: '',
   pickupAddress: '',
+  pickupFormattedAddress: '',
+  pickupLatitude: undefined,
+  pickupLongitude: undefined,
+  pickupCity: '',
+  pickupState: '',
   pickupItem: '',
   pickupTime: '',
   hasDelivery: false,
   deliveryName: '',
   deliveryAddress: '',
+  deliveryFormattedAddress: '',
+  deliveryLatitude: undefined,
+  deliveryLongitude: undefined,
+  deliveryCity: '',
+  deliveryState: '',
   deliveryItem: '',
   deliveryTime: '',
   notes: '',
@@ -154,6 +175,54 @@ export default function OrdersPage() {
     setFormOpen(true);
   }
 
+  function changePickupAddress(value: string) {
+    setForm((current) => ({
+      ...current,
+      pickupAddress: value,
+      pickupFormattedAddress: '',
+      pickupLatitude: undefined,
+      pickupLongitude: undefined,
+      pickupCity: '',
+      pickupState: '',
+    }));
+  }
+
+  function selectPickupAddress(suggestion: AddressSuggestion) {
+    setForm((current) => ({
+      ...current,
+      pickupAddress: suggestion.label,
+      pickupFormattedAddress: suggestion.label,
+      pickupLatitude: suggestion.latitude,
+      pickupLongitude: suggestion.longitude,
+      pickupCity: suggestion.city ?? '',
+      pickupState: suggestion.state ?? '',
+    }));
+  }
+
+  function changeDeliveryAddress(value: string) {
+    setForm((current) => ({
+      ...current,
+      deliveryAddress: value,
+      deliveryFormattedAddress: '',
+      deliveryLatitude: undefined,
+      deliveryLongitude: undefined,
+      deliveryCity: '',
+      deliveryState: '',
+    }));
+  }
+
+  function selectDeliveryAddress(suggestion: AddressSuggestion) {
+    setForm((current) => ({
+      ...current,
+      deliveryAddress: suggestion.label,
+      deliveryFormattedAddress: suggestion.label,
+      deliveryLatitude: suggestion.latitude,
+      deliveryLongitude: suggestion.longitude,
+      deliveryCity: suggestion.city ?? '',
+      deliveryState: suggestion.state ?? '',
+    }));
+  }
+
   async function createMission(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!form.hasPickup && !form.hasDelivery) {
@@ -174,6 +243,11 @@ export default function OrdersPage() {
             ? {
                 pickupName: form.pickupName,
                 pickupAddress: form.pickupAddress,
+                pickupFormattedAddress: form.pickupFormattedAddress || undefined,
+                pickupLatitude: form.pickupLatitude,
+                pickupLongitude: form.pickupLongitude,
+                pickupCity: form.pickupCity || undefined,
+                pickupState: form.pickupState || undefined,
                 pickupItem: form.pickupItem,
                 pickupTime: form.pickupTime || undefined,
               }
@@ -182,6 +256,11 @@ export default function OrdersPage() {
             ? {
                 deliveryName: form.deliveryName,
                 deliveryAddress: form.deliveryAddress,
+                deliveryFormattedAddress: form.deliveryFormattedAddress || undefined,
+                deliveryLatitude: form.deliveryLatitude,
+                deliveryLongitude: form.deliveryLongitude,
+                deliveryCity: form.deliveryCity || undefined,
+                deliveryState: form.deliveryState || undefined,
                 deliveryItem: form.deliveryItem,
                 deliveryTime: form.deliveryTime || undefined,
               }
@@ -283,7 +362,14 @@ export default function OrdersPage() {
             {form.hasPickup ? (
               <div className="mission-form-fields">
                 <label className="field"><span>Coleta em</span><input required value={form.pickupName} onChange={(event) => setForm({ ...form, pickupName: event.target.value })} placeholder="Ex.: Costureira Maria" /></label>
-                <label className="field"><span>Endereço completo</span><input required value={form.pickupAddress} onChange={(event) => setForm({ ...form, pickupAddress: event.target.value })} placeholder="Rua, número, cidade - PR" /></label>
+                <AddressAutocomplete
+                  label="Endereço da coleta"
+                  required
+                  value={form.pickupAddress}
+                  onValueChange={changePickupAddress}
+                  onSelect={selectPickupAddress}
+                  placeholder="Comece a digitar a rua, número ou local"
+                />
                 <label className="field"><span>O que coletar</span><textarea required rows={2} value={form.pickupItem} onChange={(event) => setForm({ ...form, pickupItem: event.target.value })} placeholder="Ex.: Buscar 30 jalecos prontos" /></label>
                 <label className="field mission-time-field"><span>Horário desejado <small>(opcional)</small></span><input type="time" value={form.pickupTime} onChange={(event) => setForm({ ...form, pickupTime: event.target.value })} /></label>
               </div>
@@ -299,7 +385,14 @@ export default function OrdersPage() {
             {form.hasDelivery ? (
               <div className="mission-form-fields">
                 <label className="field"><span>Entrega em</span><input required value={form.deliveryName} onChange={(event) => setForm({ ...form, deliveryName: event.target.value })} placeholder="Ex.: Bordado Marialva" /></label>
-                <label className="field"><span>Endereço completo</span><input required value={form.deliveryAddress} onChange={(event) => setForm({ ...form, deliveryAddress: event.target.value })} placeholder="Rua, número, cidade - PR" /></label>
+                <AddressAutocomplete
+                  label="Endereço da entrega"
+                  required
+                  value={form.deliveryAddress}
+                  onValueChange={changeDeliveryAddress}
+                  onSelect={selectDeliveryAddress}
+                  placeholder="Comece a digitar a rua, número ou local"
+                />
                 <label className="field"><span>O que entregar</span><textarea required rows={2} value={form.deliveryItem} onChange={(event) => setForm({ ...form, deliveryItem: event.target.value })} placeholder="Ex.: Levar 30 jalecos para bordar" /></label>
                 <label className="field mission-time-field"><span>Horário desejado <small>(opcional)</small></span><input type="time" value={form.deliveryTime} onChange={(event) => setForm({ ...form, deliveryTime: event.target.value })} /></label>
               </div>

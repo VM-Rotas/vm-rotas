@@ -1,10 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsIn,
+  IsNumber,
   IsOptional,
   IsString,
   Length,
   Matches,
+  Max,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -36,6 +39,38 @@ export class CreateMissionDto {
   @MinLength(5)
   pickupAddress?: string;
 
+  @ApiPropertyOptional({ example: 'Rua Exemplo, 120, Centro, Marialva, Paraná, Brasil' })
+  @IsOptional()
+  @IsString()
+  @MinLength(5)
+  pickupFormattedAddress?: string;
+
+  @ApiPropertyOptional({ example: -23.485 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  pickupLatitude?: number;
+
+  @ApiPropertyOptional({ example: -51.79 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  pickupLongitude?: number;
+
+  @ApiPropertyOptional({ example: 'Marialva' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  pickupCity?: string;
+
+  @ApiPropertyOptional({ example: 'PR' })
+  @IsOptional()
+  @IsString()
+  @Length(2, 2)
+  pickupState?: string;
+
   @ApiPropertyOptional({ example: 'Buscar 30 jalecos prontos' })
   @IsOptional()
   @IsString()
@@ -58,6 +93,38 @@ export class CreateMissionDto {
   @IsString()
   @MinLength(5)
   deliveryAddress?: string;
+
+  @ApiPropertyOptional({ example: 'Avenida Brasil, 350, Centro, Marialva, Paraná, Brasil' })
+  @IsOptional()
+  @IsString()
+  @MinLength(5)
+  deliveryFormattedAddress?: string;
+
+  @ApiPropertyOptional({ example: -23.485 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  deliveryLatitude?: number;
+
+  @ApiPropertyOptional({ example: -51.79 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  deliveryLongitude?: number;
+
+  @ApiPropertyOptional({ example: 'Marialva' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  deliveryCity?: string;
+
+  @ApiPropertyOptional({ example: 'PR' })
+  @IsOptional()
+  @IsString()
+  @Length(2, 2)
+  deliveryState?: string;
 
   @ApiPropertyOptional({ example: 'Levar os 30 jalecos para bordar' })
   @IsOptional()

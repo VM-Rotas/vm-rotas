@@ -44,6 +44,19 @@ export interface ServiceOrder {
   notes?: string | null;
 }
 
+
+export interface AddressSuggestion {
+  id: string;
+  label: string;
+  primaryText: string;
+  secondaryText?: string;
+  latitude: number;
+  longitude: number;
+  city?: string;
+  state?: string;
+  source: 'HISTORY' | 'OPENSTREETMAP';
+}
+
 export interface Vehicle {
   id: string;
   plate: string;

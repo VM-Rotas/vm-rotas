@@ -546,3 +546,122 @@ h1, h2, h3, p { margin-top: 0; }
 .role-guide { padding: .85rem; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-soft); }
 .role-guide strong { font-size: .8rem; }
 .role-guide p { color: var(--muted); font-size: .75rem; margin: .3rem 0 0; }
+
+/* Address suggestions */
+.mission-form-card.is-active { overflow: visible; position: relative; }
+.address-autocomplete { position: relative; z-index: 4; }
+.address-autocomplete > label {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 720;
+  letter-spacing: .01em;
+}
+.address-autocomplete-control { position: relative; }
+.address-autocomplete-control > svg {
+  position: absolute;
+  z-index: 1;
+  left: .78rem;
+  top: 50%;
+  width: 17px;
+  height: 17px;
+  color: var(--primary);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.address-autocomplete-control input { padding-left: 2.35rem; padding-right: 2.45rem; }
+.address-autocomplete-spinner {
+  position: absolute;
+  right: .82rem;
+  top: 50%;
+  color: var(--primary);
+  transform: translateY(-50%);
+}
+.address-suggestions {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + .4rem);
+  right: 0;
+  left: 0;
+  overflow: hidden;
+  border: 1px solid #c9dad6;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 18px 42px rgba(12, 45, 47, .16);
+}
+.address-suggestion {
+  width: 100%;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .65rem;
+  padding: .66rem .72rem;
+  border: 0;
+  border-bottom: 1px solid #e8efed;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+.address-suggestion:hover,
+.address-suggestion.is-active { background: #f1f8f6; }
+.address-suggestion-pin {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.address-suggestion-pin svg { width: 16px; height: 16px; }
+.address-suggestion-copy { min-width: 0; display: flex; flex-direction: column; gap: .12rem; }
+.address-suggestion-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: .79rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.address-suggestion-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .68rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.address-suggestion-source {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: .15rem .42rem;
+  border-radius: 99px;
+  color: var(--primary);
+  background: var(--primary-light);
+  font-size: .61rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.address-suggestion-message {
+  margin: 0;
+  padding: .78rem;
+  color: var(--muted);
+  font-size: .72rem;
+}
+.address-suggestion-footer {
+  padding: .45rem .72rem;
+  color: var(--muted-2);
+  background: var(--surface-soft);
+  font-size: .61rem;
+  text-align: right;
+}
+.address-suggestion-footer a { color: var(--primary); font-weight: 720; }
+.address-suggestion-footer a:hover { text-decoration: underline; }
+
+@media (max-width: 620px) {
+  .address-suggestion { grid-template-columns: 32px minmax(0, 1fr); }
+  .address-suggestion-source { display: none; }
+  .address-suggestion-copy strong,
+  .address-suggestion-copy small { white-space: normal; }
+}

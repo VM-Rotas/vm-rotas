@@ -12,6 +12,10 @@ export interface AppEnvironment {
   GOOGLE_MAPS_SERVER_API_KEY?: string;
   GOOGLE_CLOUD_PROJECT_ID?: string;
   GOOGLE_ROUTE_OPTIMIZATION_ENABLED: boolean;
+  ADDRESS_SEARCH_BASE_URL: string;
+  ADDRESS_SEARCH_COUNTRY_CODE: string;
+  ADDRESS_SEARCH_LAT: number;
+  ADDRESS_SEARCH_LON: number;
 }
 
 function readRequired(config: Record<string, unknown>, key: string): string {
@@ -40,12 +44,20 @@ export function validateEnvironment(config: Record<string, unknown>): AppEnviron
 
   const port = Number(config.API_PORT ?? 3001);
   const speed = Number(config.LOCAL_AVG_SPEED_KMH ?? 35);
+  const addressSearchLat = Number(config.ADDRESS_SEARCH_LAT ?? -23.865);
+  const addressSearchLon = Number(config.ADDRESS_SEARCH_LON ?? -51.856);
 
   if (!Number.isFinite(port) || port <= 0) {
     throw new Error('API_PORT inválida.');
   }
   if (!Number.isFinite(speed) || speed <= 0) {
     throw new Error('LOCAL_AVG_SPEED_KMH inválida.');
+  }
+  if (!Number.isFinite(addressSearchLat) || addressSearchLat < -90 || addressSearchLat > 90) {
+    throw new Error('ADDRESS_SEARCH_LAT inválida.');
+  }
+  if (!Number.isFinite(addressSearchLon) || addressSearchLon < -180 || addressSearchLon > 180) {
+    throw new Error('ADDRESS_SEARCH_LON inválida.');
   }
 
   return {
@@ -63,5 +75,13 @@ export function validateEnvironment(config: Record<string, unknown>): AppEnviron
     GOOGLE_CLOUD_PROJECT_ID: String(config.GOOGLE_CLOUD_PROJECT_ID ?? '').trim() || undefined,
     GOOGLE_ROUTE_OPTIMIZATION_ENABLED:
       String(config.GOOGLE_ROUTE_OPTIMIZATION_ENABLED ?? 'false').toLowerCase() === 'true',
+    ADDRESS_SEARCH_BASE_URL: String(
+      config.ADDRESS_SEARCH_BASE_URL ?? 'https://photon.komoot.io',
+    ).trim(),
+    ADDRESS_SEARCH_COUNTRY_CODE: String(
+      config.ADDRESS_SEARCH_COUNTRY_CODE ?? 'BR',
+    ).trim().toUpperCase(),
+    ADDRESS_SEARCH_LAT: addressSearchLat,
+    ADDRESS_SEARCH_LON: addressSearchLon,
   };
 }
