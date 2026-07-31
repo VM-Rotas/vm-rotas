@@ -317,6 +317,31 @@ h1, h2, h3, p { margin-top: 0; }
 .drawer-form { display: flex; flex-direction: column; gap: .9rem; padding: 1.2rem 1.4rem 1.5rem; }
 .drawer-actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: .65rem; margin: .6rem -1.4rem -1.5rem; padding: 1rem 1.4rem; border-top: 1px solid var(--line); background: rgba(255,255,255,.96); backdrop-filter: blur(10px); }
 
+/* Missions */
+.mission-drawer { width: min(620px, 96vw); }
+.mission-form { gap: 1rem; }
+.mission-form-card { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface-soft); transition: border-color .16s ease, box-shadow .16s ease, background .16s ease; }
+.mission-form-card.is-active { border-color: #b9d5d0; background: var(--surface); box-shadow: 0 7px 20px rgba(15,90,92,.055); }
+.mission-toggle { min-height: 70px; display: grid; grid-template-columns: 22px 42px minmax(0,1fr); align-items: center; gap: .7rem; padding: .85rem 1rem; cursor: pointer; }
+.mission-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+.mission-toggle > span:last-child { display: flex; flex-direction: column; gap: .08rem; }
+.mission-toggle strong { font-size: .94rem; }
+.mission-toggle small { color: var(--muted); font-size: .74rem; }
+.mission-toggle-icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: var(--muted); background: var(--surface-strong); }
+.mission-form-card.is-active .mission-toggle-icon { color: var(--primary); background: var(--primary-light); }
+.mission-form-fields { display: grid; gap: .82rem; padding: .95rem 1rem 1rem; border-top: 1px solid var(--line); }
+.mission-time-field { width: min(220px, 100%); }
+.field > span small { color: var(--muted-2); font-weight: 600; }
+.mission-table { min-width: 1120px; }
+.mission-table td:nth-child(2), .mission-table td:nth-child(3) { min-width: 235px; }
+.mission-point-summary { display: flex; flex-direction: column; gap: .18rem; max-width: 310px; }
+.mission-point-summary > strong { font-size: .82rem; }
+.mission-point-summary > span { color: var(--ink); font-size: .75rem; }
+.mission-point-summary > small { color: var(--muted); font-size: .68rem; line-height: 1.35; }
+.mission-point-summary > em { display: inline-flex; align-items: center; gap: .3rem; margin-top: .1rem; color: var(--primary); font-size: .68rem; font-style: normal; font-weight: 760; }
+.mission-point-summary > em svg { width: 13px; height: 13px; }
+.mission-empty { color: var(--muted-2); font-size: .75rem; }
+
 /* Fleet */
 .mini-stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: .8rem; margin-bottom: .9rem; }
 .mini-stat { background: var(--surface); border: 1px solid var(--line); border-radius: 13px; padding: .9rem 1rem; display: flex; align-items: baseline; justify-content: space-between; box-shadow: var(--shadow-sm); }
@@ -390,6 +415,7 @@ h1, h2, h3, p { margin-top: 0; }
 .stop-en-route .stop-number, .stop-arrived .stop-number { border-color: var(--accent); background: var(--warning-light); color: var(--warning); }
 .stop-failed .stop-number { border-color: var(--danger); background: var(--danger-light); color: var(--danger); }
 .stop-card { min-width: 0; border: 1px solid var(--line); border-radius: 11px; padding: .72rem .78rem; margin-bottom: .58rem; }
+.stop-notes { margin: .55rem 0 0; padding: .55rem .65rem; border-radius: 9px; background: var(--surface-soft); color: var(--ink); font-size: .75rem; }
 .stop-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; }
 .stop-card-heading > div { min-width: 0; display: flex; flex-direction: column; }
 .stop-card-heading strong { font-size: .78rem; }
@@ -492,6 +518,9 @@ h1, h2, h3, p { margin-top: 0; }
   .drawer { width: 100%; }
   .drawer-header, .drawer-form { padding-inline: 1rem; }
   .drawer-actions { margin-inline: -1rem; padding-inline: 1rem; }
+  .mission-toggle { grid-template-columns: 22px 38px minmax(0,1fr); padding-inline: .8rem; }
+  .mission-form-fields { padding-inline: .8rem; }
+  .mission-table td { grid-template-columns: 84px minmax(0,1fr); }
   .vehicle-specs { grid-template-columns: 1fr; }
   .route-planner-header { grid-template-columns: 42px minmax(0,1fr) 20px; gap: .55rem; }
   .route-planner-header > .route-percentage { display: none; }

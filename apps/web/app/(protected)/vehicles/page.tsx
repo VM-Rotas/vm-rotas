@@ -107,8 +107,8 @@ export default function VehiclesPage() {
     <>
       <PageHeader
         eyebrow="Recursos operacionais"
-        title="Frota"
-        description="Controle capacidade, disponibilidade e jornada dos veículos usados nas rotas."
+        title="Veículos"
+        description="Controle a disponibilidade e a jornada dos dois veículos usados nas missões."
         actions={canManage ? <button className="button button-primary" onClick={() => setFormOpen(true)}><Icon name="plus" />Novo veículo</button> : undefined}
       />
       {error ? <ErrorBanner message={error} /> : null}
@@ -122,7 +122,7 @@ export default function VehiclesPage() {
       </section>
 
       {loading && vehicles.length === 0 ? <LoadingBlock label="Carregando frota..." /> : vehicles.length === 0 ? (
-        <section className="panel"><EmptyState title="Nenhum veículo cadastrado" description="Adicione o primeiro veículo para começar a distribuir as ordens." /></section>
+        <section className="panel"><EmptyState title="Nenhum veículo cadastrado" description="Adicione o primeiro veículo para começar a distribuir as missões." /></section>
       ) : (
         <section className="vehicle-grid">
           {vehicles.map((vehicle) => (

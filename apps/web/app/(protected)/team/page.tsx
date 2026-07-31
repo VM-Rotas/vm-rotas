@@ -144,7 +144,7 @@ export default function TeamPage() {
           <label className="field"><span>Função</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as UserRole })}>{user?.role === 'OWNER' ? <option value="OWNER">Proprietário</option> : null}<option value="ADMIN">Administrador</option><option value="DISPATCHER">Despachante</option><option value="DRIVER">Motorista</option><option value="VIEWER">Somente consulta</option></select></label>
           <div className="role-guide">
             <strong>Permissões</strong>
-            <p><b>Despachante:</b> ordens, frota e planejamento. <b>Motorista:</b> execução das paradas. <b>Consulta:</b> leitura dos dados.</p>
+            <p><b>Despachante:</b> missões, veículos e roteirização. <b>Motorista:</b> execução das paradas. <b>Consulta:</b> leitura dos dados.</p>
           </div>
           <div className="drawer-actions"><button type="button" className="button button-secondary" onClick={() => setFormOpen(false)}>Cancelar</button><button type="submit" className="button button-primary" disabled={saving}>{saving ? <><span className="spinner small" />Salvando...</> : 'Criar usuário'}</button></div>
         </form>

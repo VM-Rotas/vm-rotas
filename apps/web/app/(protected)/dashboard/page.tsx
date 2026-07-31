@@ -39,7 +39,7 @@ export default function DashboardPage() {
       <PageHeader
         eyebrow="Central operacional"
         title="Visão geral do dia"
-        description="Acompanhe pedidos, urgências, veículos e o progresso das rotas em uma única tela."
+        description="Acompanhe missões, urgências, veículos e o progresso das rotas em uma única tela."
         actions={
           <div className="toolbar-group">
             <label className="compact-field"><span>Data operacional</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
@@ -54,7 +54,7 @@ export default function DashboardPage() {
       {metrics ? (
         <>
           <section className="stats-grid">
-            <StatCard icon="orders" label="Ordens do dia" value={metrics.totalOrders} detail={`${metrics.pendingOrders} ainda pendentes`} />
+            <StatCard icon="orders" label="Missões do dia" value={metrics.totalOrders} detail={`${metrics.pendingOrders} ainda pendentes`} />
             <StatCard icon="warning" label="Urgências abertas" value={metrics.urgentOrders} detail="Prioridade máxima" tone={metrics.urgentOrders > 0 ? 'danger' : 'default'} />
             <StatCard icon="routes" label="Rotas em operação" value={metrics.activeRoutes} detail={`${metrics.completedRoutes} concluídas`} tone="warning" />
             <StatCard icon="vehicles" label="Veículos disponíveis" value={metrics.availableVehicles} detail="Prontos para roteirizar" tone="success" />
@@ -63,7 +63,7 @@ export default function DashboardPage() {
           <section className="dashboard-grid">
             <article className="panel progress-panel">
               <div className="panel-heading">
-                <div><span className="eyebrow">Desempenho</span><h2>Conclusão das ordens</h2></div>
+                <div><span className="eyebrow">Desempenho</span><h2>Conclusão das missões</h2></div>
                 <strong className="large-percentage">{metrics.completionRate}%</strong>
               </div>
               <div className="progress-track large"><span style={{ width: `${metrics.completionRate}%` }} /></div>
@@ -79,9 +79,9 @@ export default function DashboardPage() {
 
             <article className="panel action-panel">
               <div className="panel-heading"><div><span className="eyebrow">Próximo passo</span><h2>Planejar operação</h2></div></div>
-              <p>Organize as ordens prontas entre os veículos disponíveis e gere a sequência ideal de paradas.</p>
+              <p>Organize as missões prontas entre os dois veículos e gere a sequência ideal de paradas.</p>
               <Link className="button button-primary" href={`/routes?date=${date}`}>Abrir planejamento <Icon name="arrow" /></Link>
-              <Link className="text-link" href={`/orders?date=${date}`}>Revisar entregas e coletas</Link>
+              <Link className="text-link" href={`/orders?date=${date}`}>Revisar missões</Link>
             </article>
           </section>
 
@@ -91,7 +91,7 @@ export default function DashboardPage() {
               <Link className="text-link" href={`/routes?date=${date}`}>Ver planejamento completo <Icon name="arrow" /></Link>
             </div>
             {data.routes.length === 0 ? (
-              <EmptyState title="Nenhuma rota criada" description="Gere o planejamento para distribuir as ordens entre os veículos." />
+              <EmptyState title="Nenhuma rota criada" description="Gere o planejamento para distribuir as missões entre os veículos." />
             ) : (
               <div className="route-summary-list">
                 {data.routes.map((route) => {

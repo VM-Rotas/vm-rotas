@@ -3,6 +3,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import type { AuthUser } from '../../common/types/auth-user';
+import { CreateMissionDto } from './dto/create-mission.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -25,9 +26,26 @@ export class OrdersController {
     return this.orders.findOne(user, id);
   }
 
+  @Post('missions')
+  @Roles('OWNER', 'ADMIN', 'DISPATCHER')
+  @ApiOperation({ summary: 'Cria uma missão com coleta, entrega ou ambas' })
+  createMission(@CurrentUser() user: AuthUser, @Body() dto: CreateMissionDto) {
+    return this.orders.createMission(user, dto);
+  }
+
+  @Delete('missions/:reference')
+  @Roles('OWNER', 'ADMIN', 'DISPATCHER')
+  @ApiOperation({ summary: 'Cancela todas as paradas de uma missão' })
+  cancelMission(
+    @CurrentUser() user: AuthUser,
+    @Param('reference') reference: string,
+  ) {
+    return this.orders.cancelMission(user, reference);
+  }
+
   @Post()
   @Roles('OWNER', 'ADMIN', 'DISPATCHER')
-  @ApiOperation({ summary: 'Cria uma entrega ou coleta' })
+  @ApiOperation({ summary: 'Cria uma entrega ou coleta individual' })
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateOrderDto) {
     return this.orders.create(user, dto);
   }

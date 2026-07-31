@@ -2,6 +2,7 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleAuth } from 'google-auth-library';
 import type {
+  OptimizableOrder,
   OptimizationContext,
   OptimizationResult,
   OptimizedVehicleRoute,
@@ -15,6 +16,8 @@ type GoogleTransition = {
 
 type GoogleVisit = {
   shipmentIndex?: number;
+  isPickup?: boolean;
+  visitRequestIndex?: number;
   startTime?: string;
 };
 
@@ -34,6 +37,13 @@ type GoogleOptimizationResponse = {
   skippedShipments?: Array<{ index?: number; label?: string }>;
 };
 
+interface MissionShipment {
+  id: string;
+  orders: OptimizableOrder[];
+  pickups: OptimizableOrder[];
+  deliveries: OptimizableOrder[];
+}
+
 @Injectable()
 export class GoogleRouteOptimizerService implements RouteOptimizer {
   private readonly auth = new GoogleAuth({
@@ -51,7 +61,8 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
       );
     }
 
-    const request = this.buildRequest(context);
+    const shipments = this.groupMissionShipments(context.orders);
+    const request = this.buildRequest(context, shipments);
     const client = await this.auth.getClient();
     const response = await client.request<GoogleOptimizationResponse>({
       url: 'https://routeoptimization.googleapis.com/v1/projects/' +
@@ -63,28 +74,48 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
     });
 
     const routes: OptimizedVehicleRoute[] = (response.data.routes ?? [])
-      .map((route) => this.mapRoute(context, route))
+      .map((route) => this.mapRoute(context, shipments, route))
       .filter((route): route is OptimizedVehicleRoute => route !== null);
 
-    const skippedOrderIds = (response.data.skippedShipments ?? [])
-      .map((skipped) => skipped.index)
-      .filter((index): index is number => index != null)
-      .map((index) => context.orders[index]?.id)
-      .filter((id): id is string => Boolean(id));
+    const skippedOrderIds = [
+      ...new Set(
+        (response.data.skippedShipments ?? [])
+          .flatMap((skipped) =>
+            skipped.index == null ? [] : (shipments[skipped.index]?.orders ?? []),
+          )
+          .map((order) => order.id),
+      ),
+    ];
 
     return {
       provider: 'GOOGLE',
       routes,
       skippedOrderIds,
       warnings: skippedOrderIds.length
-        ? [`O Google não conseguiu alocar ${skippedOrderIds.length} ordem(ns).`]
+        ? [`O Google não conseguiu alocar ${skippedOrderIds.length} parada(s).`]
         : [],
       rawRequest: request,
       rawResponse: response.data,
     };
   }
 
-  private buildRequest(context: OptimizationContext) {
+  private groupMissionShipments(orders: OptimizableOrder[]): MissionShipment[] {
+    const groups = new Map<string, OptimizableOrder[]>();
+
+    for (const order of orders) {
+      const id = order.missionId || order.id;
+      groups.set(id, [...(groups.get(id) ?? []), order]);
+    }
+
+    return [...groups.entries()].map(([id, groupedOrders]) => ({
+      id,
+      orders: groupedOrders,
+      pickups: groupedOrders.filter((order) => order.type === 'PICKUP'),
+      deliveries: groupedOrders.filter((order) => order.type === 'DELIVERY'),
+    }));
+  }
+
+  private buildRequest(context: OptimizationContext, shipments: MissionShipment[]) {
     const globalStartTime = this.atOperationalHour(context.routeDate, 8).toISOString();
     const globalEndTime = this.atOperationalHour(context.routeDate, 20).toISOString();
 
@@ -95,37 +126,34 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
       model: {
         globalStartTime,
         globalEndTime,
-        shipments: context.orders.map((order) => {
-          const visitRequest = {
-            arrivalLocation: {
-              latitude: order.latitude,
-              longitude: order.longitude,
-            },
-            duration: `${Math.max(60, order.serviceDurationMin * 60)}s`,
-            timeWindows:
-              order.timeWindowStart || order.timeWindowEnd
-                ? [
-                    {
-                      startTime: (order.timeWindowStart ?? new Date(globalStartTime)).toISOString(),
-                      endTime: (order.timeWindowEnd ?? new Date(globalEndTime)).toISOString(),
-                    },
-                  ]
-                : undefined,
-          };
+        shipments: shipments.map((shipment) => {
+          const weightKg = this.maximumDemand(shipment.orders, 'weightKg');
+          const volumeM3 = this.maximumDemand(shipment.orders, 'volumeM3');
+          const priority = shipment.orders.reduce<OptimizableOrder['priority']>(
+            (highest, order) =>
+              this.penaltyForPriority(order.priority) > this.penaltyForPriority(highest)
+                ? order.priority
+                : highest,
+            'LOW',
+          );
 
           return {
-            label: order.id,
-            pickups: order.type === 'PICKUP' ? [visitRequest] : undefined,
-            deliveries: order.type === 'DELIVERY' ? [visitRequest] : undefined,
+            label: shipment.id,
+            pickups: shipment.pickups.length
+              ? shipment.pickups.map((order) => this.visitRequest(order, globalStartTime, globalEndTime))
+              : undefined,
+            deliveries: shipment.deliveries.length
+              ? shipment.deliveries.map((order) => this.visitRequest(order, globalStartTime, globalEndTime))
+              : undefined,
             loadDemands: {
-              ...(order.weightKg != null
-                ? { weightKg: { amount: String(Math.round(order.weightKg * 1_000)) } }
+              ...(weightKg != null
+                ? { weightKg: { amount: String(Math.round(weightKg * 1_000)) } }
                 : {}),
-              ...(order.volumeM3 != null
-                ? { volumeM3: { amount: String(Math.round(order.volumeM3 * 10_000)) } }
+              ...(volumeM3 != null
+                ? { volumeM3: { amount: String(Math.round(volumeM3 * 10_000)) } }
                 : {}),
             },
-            penaltyCost: this.penaltyForPriority(order.priority),
+            penaltyCost: this.penaltyForPriority(priority),
           };
         }),
         vehicles: context.vehicles.map((vehicle) => ({
@@ -168,15 +196,43 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
     };
   }
 
-  private mapRoute(context: OptimizationContext, route: GoogleRoute): OptimizedVehicleRoute | null {
+  private visitRequest(order: OptimizableOrder, globalStartTime: string, globalEndTime: string) {
+    return {
+      label: order.id,
+      arrivalLocation: {
+        latitude: order.latitude,
+        longitude: order.longitude,
+      },
+      duration: `${Math.max(60, order.serviceDurationMin * 60)}s`,
+      timeWindows:
+        order.timeWindowStart || order.timeWindowEnd
+          ? [
+              {
+                startTime: (order.timeWindowStart ?? new Date(globalStartTime)).toISOString(),
+                endTime: (order.timeWindowEnd ?? new Date(globalEndTime)).toISOString(),
+              },
+            ]
+          : undefined,
+    };
+  }
+
+  private mapRoute(
+    context: OptimizationContext,
+    shipments: MissionShipment[],
+    route: GoogleRoute,
+  ): OptimizedVehicleRoute | null {
     const vehicle = route.vehicleIndex == null ? undefined : context.vehicles[route.vehicleIndex];
     if (!vehicle) return null;
 
     const transitions = route.transitions ?? [];
     const visits = (route.visits ?? [])
       .map((visit, index) => {
-        const order = visit.shipmentIndex == null ? undefined : context.orders[visit.shipmentIndex];
+        const shipment = visit.shipmentIndex == null ? undefined : shipments[visit.shipmentIndex];
+        if (!shipment) return null;
+        const candidates = visit.isPickup ? shipment.pickups : shipment.deliveries;
+        const order = candidates[visit.visitRequestIndex ?? 0] ?? shipment.orders[0];
         if (!order) return null;
+
         const transition = transitions[index] ?? {};
         const plannedArrivalAt = visit.startTime
           ? new Date(visit.startTime)
@@ -204,6 +260,16 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
       distanceToDepotMeters: returnTransition.travelDistanceMeters ?? 0,
       durationToDepotSeconds: this.durationToSeconds(returnTransition.travelDuration),
     };
+  }
+
+  private maximumDemand(
+    orders: OptimizableOrder[],
+    field: 'weightKg' | 'volumeM3',
+  ): number | undefined {
+    const values = orders
+      .map((order) => order[field])
+      .filter((value): value is number => value != null);
+    return values.length ? Math.max(...values) : undefined;
   }
 
   private penaltyForPriority(priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'): number {

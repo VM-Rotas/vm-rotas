@@ -8,9 +8,9 @@ import { useEffect, useState } from 'react';
 
 const links: Array<{ href: string; label: string; icon: IconName; adminOnly?: boolean }> = [
   { href: '/dashboard', label: 'Visão geral', icon: 'dashboard' },
-  { href: '/orders', label: 'Entregas e coletas', icon: 'orders' },
-  { href: '/vehicles', label: 'Frota', icon: 'vehicles' },
-  { href: '/routes', label: 'Planejamento de rotas', icon: 'routes' },
+  { href: '/orders', label: 'Missões', icon: 'orders' },
+  { href: '/vehicles', label: 'Veículos', icon: 'vehicles' },
+  { href: '/routes', label: 'Roteirização', icon: 'routes' },
   { href: '/team', label: 'Equipe e acessos', icon: 'team', adminOnly: true },
 ];
 
@@ -52,7 +52,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <aside className={`sidebar${menuOpen ? ' is-open' : ''}`}>
         <div className="sidebar-brand">
           <div className="brand-mark">VM</div>
-          <div><strong>VM Rotas</strong><span>Operação inteligente</span></div>
+          <div><strong>VM Rotas</strong><span>Missões externas</span></div>
           <button className="icon-button sidebar-close" onClick={() => setMenuOpen(false)} aria-label="Fechar menu"><Icon name="close" /></button>
         </div>
         <nav className="sidebar-nav" aria-label="Navegação principal">

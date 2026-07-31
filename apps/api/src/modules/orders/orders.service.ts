@@ -9,9 +9,18 @@ import { parseDateOnly } from '../../common/utils/date.utils';
 import { Prisma, type ServiceOrder } from '../../generated/prisma/client';
 import { MapsService } from '../maps/maps.service';
 import { PrismaService } from '../prisma/prisma.service';
+import type { CreateMissionDto } from './dto/create-mission.dto';
 import type { CreateOrderDto } from './dto/create-order.dto';
 import type { ListOrdersQueryDto } from './dto/list-orders-query.dto';
 import type { UpdateOrderDto } from './dto/update-order.dto';
+
+interface MissionPointInput {
+  type: 'PICKUP' | 'DELIVERY';
+  name: string;
+  address: string;
+  item: string;
+  time?: string;
+}
 
 @Injectable()
 export class OrdersService {
@@ -32,6 +41,8 @@ export class OrdersService {
               { code: { contains: query.search, mode: 'insensitive' } },
               { externalReference: { contains: query.search, mode: 'insensitive' } },
               { recipientName: { contains: query.search, mode: 'insensitive' } },
+              { notes: { contains: query.search, mode: 'insensitive' } },
+              { addressLine: { contains: query.search, mode: 'insensitive' } },
               { city: { contains: query.search, mode: 'insensitive' } },
             ],
           }
@@ -68,6 +79,137 @@ export class OrdersService {
       throw new NotFoundException('Ordem não encontrada.');
     }
     return order;
+  }
+
+  async createMission(user: AuthUser, dto: CreateMissionDto) {
+    const pickup = this.buildMissionPoint('PICKUP', {
+      name: dto.pickupName,
+      address: dto.pickupAddress,
+      item: dto.pickupItem,
+      time: dto.pickupTime,
+    });
+    const delivery = this.buildMissionPoint('DELIVERY', {
+      name: dto.deliveryName,
+      address: dto.deliveryAddress,
+      item: dto.deliveryItem,
+      time: dto.deliveryTime,
+    });
+    const points = [pickup, delivery].filter(
+      (point): point is MissionPointInput => point !== null,
+    );
+
+    if (points.length === 0) {
+      throw new BadRequestException('Informe uma coleta, uma entrega ou as duas.');
+    }
+
+    const plannedDate = parseDateOnly(dto.plannedDate);
+    const reference = this.generateMissionCode();
+    const geocodedPoints = await Promise.all(
+      points.map(async (point) => ({
+        point,
+        geocoded: await this.tryGeocode(point.address),
+      })),
+    );
+
+    return this.prisma.$transaction(async (transaction) => {
+      const created: ServiceOrder[] = [];
+
+      for (const { point, geocoded } of geocodedPoints) {
+        const location = this.inferCityAndState(point.address);
+        const typeSuffix = point.type === 'PICKUP' ? 'C' : 'E';
+        const timeWindowStart = this.missionDateTime(dto.plannedDate, point.time);
+        const timeWindowEnd = timeWindowStart
+          ? new Date(timeWindowStart.getTime() + 60 * 60 * 1_000)
+          : null;
+
+        const order = await transaction.serviceOrder.create({
+          data: {
+            organizationId: user.organizationId,
+            createdById: user.sub,
+            code: `${reference}-${typeSuffix}`,
+            externalReference: reference,
+            type: point.type,
+            status: 'READY',
+            priority: dto.priority ?? 'NORMAL',
+            plannedDate,
+            timeWindowStart,
+            timeWindowEnd,
+            serviceDurationMin: 10,
+            recipientName: point.name.trim(),
+            addressLine: point.address.trim(),
+            city: location.city,
+            state: location.state,
+            formattedAddress: geocoded?.formattedAddress ?? point.address.trim(),
+            latitude: geocoded?.latitude,
+            longitude: geocoded?.longitude,
+            notes: this.buildMissionNotes(point.item, dto.notes),
+          },
+        });
+        created.push(order);
+      }
+
+      await transaction.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          userId: user.sub,
+          action: 'MISSION_CREATED',
+          entityType: 'Mission',
+          entityId: reference,
+          metadata: {
+            reference,
+            priority: dto.priority ?? 'NORMAL',
+            orderIds: created.map((order) => order.id),
+            types: created.map((order) => order.type),
+          },
+        },
+      });
+
+      return { reference, orders: created };
+    });
+  }
+
+  async cancelMission(user: AuthUser, reference: string) {
+    const normalizedReference = reference.trim();
+    const orders = await this.prisma.serviceOrder.findMany({
+      where: {
+        organizationId: user.organizationId,
+        externalReference: normalizedReference,
+      },
+      select: { id: true, code: true, status: true },
+    });
+
+    if (orders.length === 0) {
+      throw new NotFoundException('Missão não encontrada.');
+    }
+    if (orders.some((order) => ['IN_PROGRESS', 'COMPLETED'].includes(order.status))) {
+      throw new BadRequestException(
+        'Não é possível cancelar uma missão em execução ou concluída.',
+      );
+    }
+
+    return this.prisma.$transaction(async (transaction) => {
+      const result = await transaction.serviceOrder.updateMany({
+        where: {
+          organizationId: user.organizationId,
+          externalReference: normalizedReference,
+        },
+        data: { status: 'CANCELLED' },
+      });
+      await transaction.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          userId: user.sub,
+          action: 'MISSION_CANCELLED',
+          entityType: 'Mission',
+          entityId: normalizedReference,
+          metadata: {
+            reference: normalizedReference,
+            orderIds: orders.map((order) => order.id),
+          },
+        },
+      });
+      return { reference: normalizedReference, cancelledStops: result.count };
+    });
   }
 
   async create(user: AuthUser, dto: CreateOrderDto) {
@@ -317,6 +459,73 @@ export class OrdersService {
       });
       return cancelled;
     });
+  }
+
+  private buildMissionPoint(
+    type: 'PICKUP' | 'DELIVERY',
+    values: {
+      name?: string;
+      address?: string;
+      item?: string;
+      time?: string;
+    },
+  ): MissionPointInput | null {
+    const supplied = [values.name, values.address, values.item, values.time].some(
+      (value) => Boolean(value?.trim()),
+    );
+    if (!supplied) return null;
+
+    if (!values.name?.trim() || !values.address?.trim() || !values.item?.trim()) {
+      const label = type === 'PICKUP' ? 'coleta' : 'entrega';
+      throw new BadRequestException(
+        `Preencha nome/local, endereço e o que será feito na ${label}.`,
+      );
+    }
+
+    return {
+      type,
+      name: values.name.trim(),
+      address: values.address.trim(),
+      item: values.item.trim(),
+      time: values.time?.trim() || undefined,
+    };
+  }
+
+  private async tryGeocode(address: string) {
+    try {
+      return await this.maps.geocode(address, false);
+    } catch {
+      return null;
+    }
+  }
+
+  private missionDateTime(plannedDate: string, time?: string): Date | null {
+    if (!time) return null;
+    const value = new Date(`${plannedDate}T${time}:00-03:00`);
+    if (Number.isNaN(value.getTime())) {
+      throw new BadRequestException('Horário inválido na missão.');
+    }
+    return value;
+  }
+
+  private buildMissionNotes(item: string, generalNotes?: string): string {
+    const notes = generalNotes?.trim();
+    return notes ? `${item.trim()}\nObservação: ${notes}` : item.trim();
+  }
+
+  private inferCityAndState(address: string): { city: string; state: string } {
+    const cityState = address.match(/,\s*([^,]+?)\s*-\s*([A-Za-z]{2})(?:\s*,|$)/);
+    if (cityState?.[1] && cityState[2]) {
+      return { city: cityState[1].trim(), state: cityState[2].toUpperCase() };
+    }
+    const state = address.match(/(?:^|[\s,-])([A-Za-z]{2})(?:\s*$)/)?.[1];
+    return { city: 'Informado no endereço', state: state?.toUpperCase() ?? 'PR' };
+  }
+
+  private generateMissionCode(): string {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const suffix = randomUUID().slice(0, 4).toUpperCase();
+    return `MIS-${timestamp}-${suffix}`;
   }
 
   private generateOrderCode(): string {

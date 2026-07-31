@@ -18,6 +18,16 @@ interface VehicleBucket {
   lastPoint: GeoPoint;
 }
 
+interface MissionJob {
+  id: string;
+  orders: OptimizableOrder[];
+  entryPoint: OptimizableOrder;
+  exitPoint: OptimizableOrder;
+  priorityScore: number;
+  weightKg: number;
+  volumeM3: number;
+}
+
 const PRIORITY_SCORE: Record<OptimizableOrder['priority'], number> = {
   URGENT: 0,
   HIGH: 1,
@@ -47,38 +57,39 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
     }));
 
     const skippedOrderIds: string[] = [];
-    const sortedOrders = [...context.orders].sort((a, b) => {
-      const priority = PRIORITY_SCORE[a.priority] - PRIORITY_SCORE[b.priority];
+    const jobs = this.groupMissionJobs(context.orders).sort((a, b) => {
+      const priority = a.priorityScore - b.priorityScore;
       if (priority !== 0) return priority;
-      return this.distanceMeters(context.startLocation, a) - this.distanceMeters(context.startLocation, b);
+      return this.distanceMeters(context.startLocation, a.entryPoint) -
+        this.distanceMeters(context.startLocation, b.entryPoint);
     });
 
-    for (const order of sortedOrders) {
+    for (const job of jobs) {
       const feasible = buckets
-        .filter((bucket) => this.hasCapacity(bucket, order))
+        .filter((bucket) => this.hasJobCapacity(bucket, job))
         .map((bucket) => ({
           bucket,
           score:
-            this.distanceMeters(bucket.lastPoint, order) +
+            this.distanceMeters(bucket.lastPoint, job.entryPoint) +
             bucket.orders.length * 3_000 +
-            this.capacityPenalty(bucket, order),
+            this.jobCapacityPenalty(bucket, job),
         }))
         .sort((a, b) => a.score - b.score);
 
       const selected = feasible[0]?.bucket;
       if (!selected) {
-        skippedOrderIds.push(order.id);
+        skippedOrderIds.push(...job.orders.map((order) => order.id));
         continue;
       }
 
-      selected.orders.push(order);
-      selected.weightKg += order.weightKg ?? 0;
-      selected.volumeM3 += order.volumeM3 ?? 0;
-      selected.lastPoint = order;
+      selected.orders.push(...job.orders);
+      selected.weightKg += job.weightKg;
+      selected.volumeM3 += job.volumeM3;
+      selected.lastPoint = job.exitPoint;
     }
 
     if (skippedOrderIds.length > 0) {
-      warnings.push(`${skippedOrderIds.length} ordem(ns) não couberam na capacidade informada da frota.`);
+      warnings.push(`${skippedOrderIds.length} parada(s) não couberam na capacidade informada da frota.`);
     }
 
     const routes = buckets
@@ -93,13 +104,60 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
     };
   }
 
+  private groupMissionJobs(orders: OptimizableOrder[]): MissionJob[] {
+    const groups = new Map<string, OptimizableOrder[]>();
+
+    for (const order of orders) {
+      const key = order.missionId || order.id;
+      const current = groups.get(key) ?? [];
+      current.push(order);
+      groups.set(key, current);
+    }
+
+    return [...groups.entries()].map(([id, groupedOrders]) => {
+      const ordered = [...groupedOrders].sort((a, b) => {
+        if (a.type === b.type) return 0;
+        return a.type === 'PICKUP' ? -1 : 1;
+      });
+      const first = ordered[0];
+      if (!first) throw new Error('Uma missão sem paradas não pode ser otimizada.');
+      const pickup = ordered.find((order) => order.type === 'PICKUP');
+      const delivery = [...ordered].reverse().find((order) => order.type === 'DELIVERY');
+
+      return {
+        id,
+        orders: ordered,
+        entryPoint: pickup ?? first,
+        exitPoint: delivery ?? ordered[ordered.length - 1] ?? first,
+        priorityScore: Math.min(...ordered.map((order) => PRIORITY_SCORE[order.priority])),
+        weightKg: ordered.reduce((total, order) => total + (order.weightKg ?? 0), 0),
+        volumeM3: ordered.reduce((total, order) => total + (order.volumeM3 ?? 0), 0),
+      };
+    });
+  }
+
   private buildRoute(context: OptimizationContext, bucket: VehicleBucket): OptimizedVehicleRoute {
     const remaining = [...bucket.orders];
     const sequence: OptimizableOrder[] = [];
+    const missionsWithPickup = new Set(
+      bucket.orders
+        .filter((order) => order.type === 'PICKUP' && order.missionId)
+        .map((order) => order.missionId as string),
+    );
+    const completedPickups = new Set<string>();
     let current: GeoPoint = context.startLocation;
 
     while (remaining.length > 0) {
-      remaining.sort((a, b) => {
+      const eligible = remaining.filter(
+        (order) =>
+          order.type !== 'DELIVERY' ||
+          !order.missionId ||
+          !missionsWithPickup.has(order.missionId) ||
+          completedPickups.has(order.missionId),
+      );
+      const candidates = eligible.length > 0 ? eligible : remaining;
+
+      candidates.sort((a, b) => {
         const urgencyPenaltyA = PRIORITY_SCORE[a.priority] * 35_000;
         const urgencyPenaltyB = PRIORITY_SCORE[b.priority] * 35_000;
         return (
@@ -107,10 +165,13 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
           (this.distanceMeters(current, b) + urgencyPenaltyB)
         );
       });
-      const next = remaining.shift();
+
+      const next = candidates[0];
       if (!next) break;
+      remaining.splice(remaining.findIndex((order) => order.id === next.id), 1);
       sequence.push(next);
       current = next;
+      if (next.type === 'PICKUP' && next.missionId) completedPickups.add(next.missionId);
     }
 
     const startAt = this.vehicleStartAt(context.routeDate, bucket.vehicle.startHour);
@@ -160,20 +221,20 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
     };
   }
 
-  private hasCapacity(bucket: VehicleBucket, order: OptimizableOrder): boolean {
+  private hasJobCapacity(bucket: VehicleBucket, job: MissionJob): boolean {
     const weightCapacity = bucket.vehicle.capacityWeightKg;
     const volumeCapacity = bucket.vehicle.capacityVolumeM3;
-    const weightOk = weightCapacity == null || bucket.weightKg + (order.weightKg ?? 0) <= weightCapacity;
-    const volumeOk = volumeCapacity == null || bucket.volumeM3 + (order.volumeM3 ?? 0) <= volumeCapacity;
+    const weightOk = weightCapacity == null || bucket.weightKg + job.weightKg <= weightCapacity;
+    const volumeOk = volumeCapacity == null || bucket.volumeM3 + job.volumeM3 <= volumeCapacity;
     return weightOk && volumeOk;
   }
 
-  private capacityPenalty(bucket: VehicleBucket, order: OptimizableOrder): number {
+  private jobCapacityPenalty(bucket: VehicleBucket, job: MissionJob): number {
     const weightRatio = bucket.vehicle.capacityWeightKg
-      ? (bucket.weightKg + (order.weightKg ?? 0)) / bucket.vehicle.capacityWeightKg
+      ? (bucket.weightKg + job.weightKg) / bucket.vehicle.capacityWeightKg
       : 0;
     const volumeRatio = bucket.vehicle.capacityVolumeM3
-      ? (bucket.volumeM3 + (order.volumeM3 ?? 0)) / bucket.vehicle.capacityVolumeM3
+      ? (bucket.volumeM3 + job.volumeM3) / bucket.vehicle.capacityVolumeM3
       : 0;
     return Math.max(weightRatio, volumeRatio) * 10_000;
   }
@@ -185,8 +246,6 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
 
   private vehicleStartAt(routeDate: Date, startHour?: string): Date {
     const [hour, minute] = (startHour ?? '08:00').split(':').map(Number);
-    // Datas operacionais são armazenadas como DATE. Para o MVP brasileiro, convertemos
-    // o horário local BRT (UTC-3) para UTC sem adicionar uma dependência de timezone.
     return new Date(
       Date.UTC(
         routeDate.getUTCFullYear(),

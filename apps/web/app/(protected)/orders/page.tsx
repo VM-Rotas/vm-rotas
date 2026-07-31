@@ -6,45 +6,101 @@ import { Icon } from '@/components/icons';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { api, ApiError, queryString } from '@/lib/api';
-import { todayDateInput } from '@/lib/format';
-import type { ServiceOrder } from '@/lib/types';
+import { formatTime, todayDateInput } from '@/lib/format';
+import type { OrderPriority, OrderStatus, ServiceOrder } from '@/lib/types';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
-interface OrderForm {
-  type: 'DELIVERY' | 'PICKUP';
-  priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
-  recipientName: string;
-  recipientPhone: string;
-  addressLine: string;
-  addressNumber: string;
-  neighborhood: string;
-  city: string;
-  state: string;
-  postalCode: string;
-  latitude: string;
-  longitude: string;
-  serviceDurationMin: string;
-  weightKg: string;
+interface MissionForm {
+  priority: OrderPriority;
+  hasPickup: boolean;
+  pickupName: string;
+  pickupAddress: string;
+  pickupItem: string;
+  pickupTime: string;
+  hasDelivery: boolean;
+  deliveryName: string;
+  deliveryAddress: string;
+  deliveryItem: string;
+  deliveryTime: string;
   notes: string;
 }
 
-const initialForm: OrderForm = {
-  type: 'DELIVERY',
+interface MissionView {
+  reference: string;
+  orders: ServiceOrder[];
+  pickup?: ServiceOrder;
+  delivery?: ServiceOrder;
+  priority: OrderPriority;
+  status: OrderStatus;
+  bundled: boolean;
+}
+
+const initialForm: MissionForm = {
   priority: 'NORMAL',
-  recipientName: '',
-  recipientPhone: '',
-  addressLine: '',
-  addressNumber: '',
-  neighborhood: '',
-  city: 'São Pedro do Ivaí',
-  state: 'PR',
-  postalCode: '',
-  latitude: '',
-  longitude: '',
-  serviceDurationMin: '10',
-  weightKg: '',
+  hasPickup: true,
+  pickupName: '',
+  pickupAddress: '',
+  pickupItem: '',
+  pickupTime: '',
+  hasDelivery: false,
+  deliveryName: '',
+  deliveryAddress: '',
+  deliveryItem: '',
+  deliveryTime: '',
   notes: '',
 };
+
+const STATUS_ORDER: OrderStatus[] = [
+  'IN_PROGRESS',
+  'ROUTED',
+  'READY',
+  'PLANNED',
+  'FAILED',
+  'COMPLETED',
+  'CANCELLED',
+];
+
+function missionStatus(orders: ServiceOrder[]): OrderStatus {
+  if (orders.every((order) => order.status === 'CANCELLED')) return 'CANCELLED';
+  if (orders.every((order) => order.status === 'COMPLETED')) return 'COMPLETED';
+  return STATUS_ORDER.find((status) => orders.some((order) => order.status === status)) ?? 'READY';
+}
+
+function groupMissions(orders: ServiceOrder[]): MissionView[] {
+  const groups = new Map<string, ServiceOrder[]>();
+
+  for (const order of orders) {
+    const bundled = Boolean(order.externalReference?.startsWith('MIS-'));
+    const key = bundled ? order.externalReference! : order.code;
+    groups.set(key, [...(groups.get(key) ?? []), order]);
+  }
+
+  return [...groups.entries()].map(([reference, groupedOrders]) => ({
+    reference,
+    orders: groupedOrders,
+    pickup: groupedOrders.find((order) => order.type === 'PICKUP'),
+    delivery: groupedOrders.find((order) => order.type === 'DELIVERY'),
+    priority: groupedOrders[0]?.priority ?? 'NORMAL',
+    status: missionStatus(groupedOrders),
+    bundled: reference.startsWith('MIS-'),
+  }));
+}
+
+function missionItem(order?: ServiceOrder): string {
+  return order?.notes?.split('\n')[0]?.trim() || 'Item não informado';
+}
+
+function MissionPoint({ order, emptyLabel }: { order?: ServiceOrder; emptyLabel: string }) {
+  if (!order) return <span className="mission-empty">{emptyLabel}</span>;
+  return (
+    <div className="mission-point-summary">
+      <strong>{order.recipientName}</strong>
+      <span>{missionItem(order)}</span>
+      <small>{order.formattedAddress || order.addressLine}</small>
+      {order.timeWindowStart ? <em><Icon name="clock" />{formatTime(order.timeWindowStart)}</em> : null}
+    </div>
+  );
+}
 
 export default function OrdersPage() {
   const { user } = useAuth();
@@ -52,12 +108,11 @@ export default function OrdersPage() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [formOpen, setFormOpen] = useState(false);
-  const [form, setForm] = useState<OrderForm>(initialForm);
+  const [form, setForm] = useState<MissionForm>(initialForm);
   const [saving, setSaving] = useState(false);
   const canManage = Boolean(user && ['OWNER', 'ADMIN', 'DISPATCHER'].includes(user.role));
 
@@ -71,12 +126,11 @@ export default function OrdersPage() {
     setError('');
     try {
       const result = await api<{ items: ServiceOrder[]; total: number }>(
-        `/orders${queryString({ date, search, status, take: 100 })}`,
+        `/orders${queryString({ date, search, status, take: 200 })}`,
       );
       setOrders(result.items);
-      setTotal(result.total);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Não foi possível carregar as ordens.');
+      setError(caught instanceof ApiError ? caught.message : 'Não foi possível carregar as missões.');
     } finally {
       setLoading(false);
     }
@@ -87,68 +141,87 @@ export default function OrdersPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  const missions = useMemo(() => groupMissions(orders), [orders]);
   const urgentCount = useMemo(
-    () => orders.filter((order) => order.priority === 'URGENT' && !['COMPLETED', 'CANCELLED'].includes(order.status)).length,
-    [orders],
+    () => missions.filter((mission) => mission.priority === 'URGENT' && !['COMPLETED', 'CANCELLED'].includes(mission.status)).length,
+    [missions],
   );
 
-  async function createOrder(event: FormEvent<HTMLFormElement>) {
+  function openForm() {
+    setError('');
+    setSuccess('');
+    setForm(initialForm);
+    setFormOpen(true);
+  }
+
+  async function createMission(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!form.hasPickup && !form.hasDelivery) {
+      setError('Marque uma coleta, uma entrega ou as duas.');
+      return;
+    }
+
     setSaving(true);
     setError('');
     setSuccess('');
     try {
-      await api('/orders', {
+      await api('/orders/missions', {
         method: 'POST',
         body: JSON.stringify({
-          type: form.type,
-          priority: form.priority,
           plannedDate: date,
-          recipientName: form.recipientName,
-          customerName: form.recipientName,
-          recipientPhone: form.recipientPhone || undefined,
-          addressLine: form.addressLine,
-          addressNumber: form.addressNumber || undefined,
-          neighborhood: form.neighborhood || undefined,
-          city: form.city,
-          state: form.state,
-          postalCode: form.postalCode || undefined,
-          latitude: form.latitude ? Number(form.latitude) : undefined,
-          longitude: form.longitude ? Number(form.longitude) : undefined,
-          serviceDurationMin: Number(form.serviceDurationMin),
-          weightKg: form.weightKg ? Number(form.weightKg) : undefined,
+          priority: form.priority,
+          ...(form.hasPickup
+            ? {
+                pickupName: form.pickupName,
+                pickupAddress: form.pickupAddress,
+                pickupItem: form.pickupItem,
+                pickupTime: form.pickupTime || undefined,
+              }
+            : {}),
+          ...(form.hasDelivery
+            ? {
+                deliveryName: form.deliveryName,
+                deliveryAddress: form.deliveryAddress,
+                deliveryItem: form.deliveryItem,
+                deliveryTime: form.deliveryTime || undefined,
+              }
+            : {}),
           notes: form.notes || undefined,
         }),
       });
       setForm(initialForm);
       setFormOpen(false);
-      setSuccess('Ordem criada e adicionada à operação do dia.');
+      setSuccess('Missão cadastrada e pronta para entrar na rota.');
       await load();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Não foi possível criar a ordem.');
+      setError(caught instanceof ApiError ? caught.message : 'Não foi possível cadastrar a missão.');
     } finally {
       setSaving(false);
     }
   }
 
-  async function cancelOrder(order: ServiceOrder) {
-    if (!window.confirm(`Cancelar a ordem ${order.code}?`)) return;
+  async function cancelMission(mission: MissionView) {
+    if (!window.confirm(`Cancelar a missão ${mission.reference}?`)) return;
     try {
-      await api(`/orders/${order.id}`, { method: 'DELETE' });
-      setSuccess(`Ordem ${order.code} cancelada.`);
+      if (mission.bundled) {
+        await api(`/orders/missions/${encodeURIComponent(mission.reference)}`, { method: 'DELETE' });
+      } else {
+        await api(`/orders/${mission.orders[0]?.id}`, { method: 'DELETE' });
+      }
+      setSuccess(`Missão ${mission.reference} cancelada.`);
       await load();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Não foi possível cancelar a ordem.');
+      setError(caught instanceof ApiError ? caught.message : 'Não foi possível cancelar a missão.');
     }
   }
 
   return (
     <>
       <PageHeader
-        eyebrow="Demanda operacional"
-        title="Entregas e coletas"
-        description="Cadastre destinos, defina prioridades e prepare tudo o que deve entrar no planejamento."
-        actions={canManage ? <button className="button button-primary" onClick={() => setFormOpen(true)}><Icon name="plus" />Nova ordem</button> : undefined}
+        eyebrow="Operação externa"
+        title="Missões do dia"
+        description="Cadastre rapidamente o que precisa buscar, levar ou comprar."
+        actions={canManage ? <button className="button button-primary" onClick={openForm}><Icon name="plus" />Nova missão</button> : undefined}
       />
       {error ? <ErrorBanner message={error} /> : null}
       {success ? <SuccessBanner message={success} /> : null}
@@ -156,31 +229,34 @@ export default function OrdersPage() {
       <section className="panel filter-panel">
         <div className="filter-grid">
           <label className="field compact"><span>Data</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-          <label className="field compact field-grow"><span>Buscar</span><input type="search" placeholder="Código, cliente ou cidade" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-          <label className="field compact"><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todos</option><option value="PLANNED">Planejada</option><option value="READY">Pronta</option><option value="ROUTED">Roteirizada</option><option value="IN_PROGRESS">Em andamento</option><option value="COMPLETED">Concluída</option><option value="FAILED">Falhou</option><option value="CANCELLED">Cancelada</option></select></label>
+          <label className="field compact field-grow"><span>Buscar</span><input type="search" placeholder="Nome, endereço ou item" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+          <label className="field compact"><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todos</option><option value="PLANNED">Planejada</option><option value="READY">Pronta</option><option value="ROUTED">Na rota</option><option value="IN_PROGRESS">Em andamento</option><option value="COMPLETED">Concluída</option><option value="FAILED">Com problema</option><option value="CANCELLED">Cancelada</option></select></label>
         </div>
-        <div className="filter-summary"><strong>{total}</strong> ordens encontradas {urgentCount > 0 ? <span className="urgent-inline"><Icon name="warning" />{urgentCount} urgência(s)</span> : null}</div>
+        <div className="filter-summary"><strong>{missions.length}</strong> missão(ões) {urgentCount > 0 ? <span className="urgent-inline"><Icon name="warning" />{urgentCount} urgente(s)</span> : null}</div>
       </section>
 
       <section className="panel table-panel">
-        {loading && orders.length === 0 ? <LoadingBlock /> : orders.length === 0 ? (
-          <EmptyState title="Nenhuma ordem nesta data" description="Cadastre a primeira entrega ou coleta para iniciar o planejamento." />
+        {loading && missions.length === 0 ? <LoadingBlock /> : missions.length === 0 ? (
+          <EmptyState title="Nenhuma missão nesta data" description="Cadastre o primeiro local que precisa ser visitado." />
         ) : (
           <div className="responsive-table-wrap">
-            <table className="data-table">
-              <thead><tr><th>Ordem</th><th>Destino</th><th>Tipo</th><th>Prioridade</th><th>Status</th><th>Geolocalização</th><th aria-label="Ações" /></tr></thead>
+            <table className="data-table mission-table">
+              <thead><tr><th>Missão</th><th>Coleta</th><th>Entrega</th><th>Prioridade</th><th>Status</th><th>Mapa</th><th aria-label="Ações" /></tr></thead>
               <tbody>
-                {orders.map((order) => (
-                  <tr key={order.id}>
-                    <td data-label="Ordem"><strong>{order.code}</strong>{order.externalReference ? <small>{order.externalReference}</small> : null}</td>
-                    <td data-label="Destino"><strong>{order.recipientName}</strong><small>{order.addressLine}{order.addressNumber ? `, ${order.addressNumber}` : ''} · {order.city}/{order.state}</small></td>
-                    <td data-label="Tipo">{order.type === 'DELIVERY' ? 'Entrega' : 'Coleta'}</td>
-                    <td data-label="Prioridade"><StatusBadge value={order.priority} compact /></td>
-                    <td data-label="Status"><StatusBadge value={order.status} compact /></td>
-                    <td data-label="Geolocalização"><span className={order.latitude != null && order.longitude != null ? 'coordinate-ok' : 'coordinate-missing'}><Icon name={order.latitude != null && order.longitude != null ? 'check' : 'warning'} />{order.latitude != null && order.longitude != null ? 'Pronta' : 'Pendente'}</span></td>
-                    <td className="table-actions">{canManage && !['IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(order.status) ? <button className="button button-ghost button-small danger-text" onClick={() => void cancelOrder(order)}>Cancelar</button> : null}</td>
-                  </tr>
-                ))}
+                {missions.map((mission) => {
+                  const coordinatesReady = mission.orders.every((order) => order.latitude != null && order.longitude != null);
+                  return (
+                    <tr key={mission.reference}>
+                      <td data-label="Missão"><strong>{mission.reference}</strong><small>{mission.orders.length === 2 ? 'Coleta + entrega' : mission.pickup ? 'Somente coleta' : 'Somente entrega'}</small></td>
+                      <td data-label="Coleta"><MissionPoint order={mission.pickup} emptyLabel="Sem coleta" /></td>
+                      <td data-label="Entrega"><MissionPoint order={mission.delivery} emptyLabel="Sem entrega" /></td>
+                      <td data-label="Prioridade"><StatusBadge value={mission.priority} compact /></td>
+                      <td data-label="Status"><StatusBadge value={mission.status} compact /></td>
+                      <td data-label="Mapa"><span className={coordinatesReady ? 'coordinate-ok' : 'coordinate-missing'}><Icon name={coordinatesReady ? 'check' : 'warning'} />{coordinatesReady ? 'Pronta' : 'Pendente'}</span></td>
+                      <td className="table-actions">{canManage && !['IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(mission.status) ? <button className="button button-ghost button-small danger-text" onClick={() => void cancelMission(mission)}>Cancelar</button> : null}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -188,25 +264,51 @@ export default function OrdersPage() {
       </section>
 
       <div className={`drawer-backdrop${formOpen ? ' is-open' : ''}`} onClick={() => setFormOpen(false)} />
-      <aside className={`drawer${formOpen ? ' is-open' : ''}`} aria-hidden={!formOpen}>
-        <div className="drawer-header"><div><span className="eyebrow">Nova demanda</span><h2>Cadastrar ordem</h2></div><button className="icon-button" onClick={() => setFormOpen(false)} aria-label="Fechar"><Icon name="close" /></button></div>
-        <form className="drawer-form" onSubmit={createOrder}>
+      <aside className={`drawer mission-drawer${formOpen ? ' is-open' : ''}`} aria-hidden={!formOpen}>
+        <div className="drawer-header"><div><span className="eyebrow">Operação externa</span><h2>Nova missão</h2></div><button className="icon-button" onClick={() => setFormOpen(false)} aria-label="Fechar"><Icon name="close" /></button></div>
+        <form className="drawer-form mission-form" onSubmit={createMission}>
+          <div className="form-hint"><Icon name="check" />Preencha somente a coleta, somente a entrega ou as duas na mesma missão.</div>
+
           <div className="form-row two">
-            <label className="field"><span>Tipo</span><select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as OrderForm['type'] })}><option value="DELIVERY">Entrega</option><option value="PICKUP">Coleta</option></select></label>
-            <label className="field"><span>Prioridade</span><select value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as OrderForm['priority'] })}><option value="LOW">Baixa</option><option value="NORMAL">Normal</option><option value="HIGH">Alta</option><option value="URGENT">Urgente</option></select></label>
+            <label className="field"><span>Data</span><input type="date" required value={date} onChange={(event) => setDate(event.target.value)} /></label>
+            <label className="field"><span>Prioridade</span><select value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as OrderPriority })}><option value="NORMAL">Normal</option><option value="HIGH">Alta</option><option value="URGENT">Urgente</option><option value="LOW">Baixa</option></select></label>
           </div>
-          <label className="field"><span>Destinatário</span><input required value={form.recipientName} onChange={(event) => setForm({ ...form, recipientName: event.target.value })} placeholder="Nome da pessoa ou empresa" /></label>
-          <label className="field"><span>Telefone</span><input value={form.recipientPhone} onChange={(event) => setForm({ ...form, recipientPhone: event.target.value })} placeholder="(43) 99999-9999" /></label>
-          <div className="form-section-title">Endereço</div>
-          <div className="form-row address"><label className="field"><span>Logradouro</span><input required value={form.addressLine} onChange={(event) => setForm({ ...form, addressLine: event.target.value })} /></label><label className="field narrow"><span>Número</span><input value={form.addressNumber} onChange={(event) => setForm({ ...form, addressNumber: event.target.value })} /></label></div>
-          <label className="field"><span>Bairro</span><input value={form.neighborhood} onChange={(event) => setForm({ ...form, neighborhood: event.target.value })} /></label>
-          <div className="form-row city"><label className="field"><span>Cidade</span><input required value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} /></label><label className="field state"><span>UF</span><input required maxLength={2} value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value.toUpperCase() })} /></label><label className="field postal"><span>CEP</span><input value={form.postalCode} onChange={(event) => setForm({ ...form, postalCode: event.target.value })} /></label></div>
-          <div className="form-hint"><Icon name="pin" />Com a chave de Geocoding configurada, latitude e longitude são preenchidas automaticamente. Para testes sem chave, informe-as abaixo.</div>
-          <div className="form-row two"><label className="field"><span>Latitude</span><input type="number" step="any" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: event.target.value })} placeholder="-23.865" /></label><label className="field"><span>Longitude</span><input type="number" step="any" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: event.target.value })} placeholder="-51.856" /></label></div>
-          <div className="form-section-title">Operação</div>
-          <div className="form-row two"><label className="field"><span>Atendimento (min)</span><input required type="number" min="1" value={form.serviceDurationMin} onChange={(event) => setForm({ ...form, serviceDurationMin: event.target.value })} /></label><label className="field"><span>Peso (kg)</span><input type="number" min="0" step="0.1" value={form.weightKg} onChange={(event) => setForm({ ...form, weightKg: event.target.value })} /></label></div>
-          <label className="field"><span>Observações</span><textarea rows={3} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></label>
-          <div className="drawer-actions"><button type="button" className="button button-secondary" onClick={() => setFormOpen(false)}>Cancelar</button><button type="submit" className="button button-primary" disabled={saving}>{saving ? <><span className="spinner small" />Salvando...</> : 'Cadastrar ordem'}</button></div>
+
+          <section className={`mission-form-card${form.hasPickup ? ' is-active' : ''}`}>
+            <label className="mission-toggle">
+              <input type="checkbox" checked={form.hasPickup} onChange={(event) => setForm({ ...form, hasPickup: event.target.checked })} />
+              <span className="mission-toggle-icon"><Icon name="pin" /></span>
+              <span><strong>Coleta</strong><small>Buscar algo em um local</small></span>
+            </label>
+            {form.hasPickup ? (
+              <div className="mission-form-fields">
+                <label className="field"><span>Coleta em</span><input required value={form.pickupName} onChange={(event) => setForm({ ...form, pickupName: event.target.value })} placeholder="Ex.: Costureira Maria" /></label>
+                <label className="field"><span>Endereço completo</span><input required value={form.pickupAddress} onChange={(event) => setForm({ ...form, pickupAddress: event.target.value })} placeholder="Rua, número, cidade - PR" /></label>
+                <label className="field"><span>O que coletar</span><textarea required rows={2} value={form.pickupItem} onChange={(event) => setForm({ ...form, pickupItem: event.target.value })} placeholder="Ex.: Buscar 30 jalecos prontos" /></label>
+                <label className="field mission-time-field"><span>Horário desejado <small>(opcional)</small></span><input type="time" value={form.pickupTime} onChange={(event) => setForm({ ...form, pickupTime: event.target.value })} /></label>
+              </div>
+            ) : null}
+          </section>
+
+          <section className={`mission-form-card${form.hasDelivery ? ' is-active' : ''}`}>
+            <label className="mission-toggle">
+              <input type="checkbox" checked={form.hasDelivery} onChange={(event) => setForm({ ...form, hasDelivery: event.target.checked })} />
+              <span className="mission-toggle-icon"><Icon name="routes" /></span>
+              <span><strong>Entrega</strong><small>Levar algo para um local</small></span>
+            </label>
+            {form.hasDelivery ? (
+              <div className="mission-form-fields">
+                <label className="field"><span>Entrega em</span><input required value={form.deliveryName} onChange={(event) => setForm({ ...form, deliveryName: event.target.value })} placeholder="Ex.: Bordado Marialva" /></label>
+                <label className="field"><span>Endereço completo</span><input required value={form.deliveryAddress} onChange={(event) => setForm({ ...form, deliveryAddress: event.target.value })} placeholder="Rua, número, cidade - PR" /></label>
+                <label className="field"><span>O que entregar</span><textarea required rows={2} value={form.deliveryItem} onChange={(event) => setForm({ ...form, deliveryItem: event.target.value })} placeholder="Ex.: Levar 30 jalecos para bordar" /></label>
+                <label className="field mission-time-field"><span>Horário desejado <small>(opcional)</small></span><input type="time" value={form.deliveryTime} onChange={(event) => setForm({ ...form, deliveryTime: event.target.value })} /></label>
+              </div>
+            ) : null}
+          </section>
+
+          <label className="field"><span>Observação <small>(opcional)</small></span><textarea rows={2} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Ex.: Ligar antes de chegar" /></label>
+
+          <div className="drawer-actions"><button type="button" className="button button-secondary" onClick={() => setFormOpen(false)}>Cancelar</button><button type="submit" className="button button-primary" disabled={saving}>{saving ? <><span className="spinner small" />Salvando...</> : 'Salvar missão'}</button></div>
         </form>
       </aside>
     </>

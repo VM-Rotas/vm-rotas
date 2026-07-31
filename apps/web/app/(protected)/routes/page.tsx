@@ -18,6 +18,26 @@ interface OptimizeResponse {
   warnings: string[];
 }
 
+interface MissionGroup {
+  key: string;
+  orders: ServiceOrder[];
+  representative: ServiceOrder;
+}
+
+function groupOrdersByMission(orders: ServiceOrder[]): MissionGroup[] {
+  const groups = new Map<string, ServiceOrder[]>();
+  for (const order of orders) {
+    const key = order.externalReference?.startsWith('MIS-')
+      ? order.externalReference
+      : order.code;
+    groups.set(key, [...(groups.get(key) ?? []), order]);
+  }
+  return [...groups.entries()].flatMap(([key, groupedOrders]) => {
+    const representative = groupedOrders[0];
+    return representative ? [{ key, orders: groupedOrders, representative }] : [];
+  });
+}
+
 const finishedStatuses = ['COMPLETED', 'FAILED', 'SKIPPED'];
 
 export default function RoutesPage() {
@@ -67,13 +87,14 @@ export default function RoutesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
-  const readyOrders = useMemo(
-    () => orders.filter((order) => ['PLANNED', 'READY'].includes(order.status)),
-    [orders],
+  const missionGroups = useMemo(() => groupOrdersByMission(orders), [orders]);
+  const readyMissions = useMemo(
+    () => missionGroups.filter((mission) => mission.orders.some((order) => ['PLANNED', 'READY'].includes(order.status))),
+    [missionGroups],
   );
-  const urgentOrders = useMemo(
-    () => orders.filter((order) => order.priority === 'URGENT' && ['PLANNED', 'READY'].includes(order.status)),
-    [orders],
+  const urgentMissions = useMemo(
+    () => readyMissions.filter((mission) => mission.orders.some((order) => order.priority === 'URGENT')),
+    [readyMissions],
   );
 
   async function optimize() {
@@ -154,14 +175,14 @@ export default function RoutesPage() {
       {warnings.map((warning) => <div className="alert alert-warning" key={warning}><Icon name="warning" /><span>{warning}</span></div>)}
 
       <section className="planning-strip">
-        <div><span>Ordens prontas</span><strong>{readyOrders.length}</strong></div>
+        <div><span>Missões prontas</span><strong>{readyMissions.length}</strong></div>
         <div><span>Rotas ativas</span><strong>{routes.filter((route) => ['OPTIMIZED', 'IN_PROGRESS'].includes(route.status)).length}</strong></div>
-        <div><span>Urgências abertas</span><strong>{urgentOrders.length}</strong></div>
+        <div><span>Urgências abertas</span><strong>{urgentMissions.length}</strong></div>
         <div><span>Distância planejada</span><strong>{formatDistance(routes.reduce((sum, route) => sum + route.totalDistanceMeters, 0))}</strong></div>
       </section>
 
       {loading && routes.length === 0 ? <LoadingBlock label="Carregando planejamento..." /> : routes.length === 0 ? (
-        <section className="panel"><EmptyState title="Ainda não existem rotas" description="Revise as ordens prontas e use “Gerar melhores rotas” para criar o planejamento do dia." /></section>
+        <section className="panel"><EmptyState title="Ainda não existem rotas" description="Revise as missões prontas e use “Gerar melhores rotas” para criar o planejamento do dia." /></section>
       ) : (
         <section className="route-planner-list">
           {routes.map((route) => {
@@ -169,8 +190,11 @@ export default function RoutesPage() {
             const serviceStops = route.stops.filter((stop) => stop.type === 'SERVICE');
             const completed = serviceStops.filter((stop) => stop.status === 'COMPLETED').length;
             const percent = serviceStops.length ? Math.round((completed / serviceStops.length) * 100) : 0;
-            const availableUrgencies = urgentOrders.filter(
-              (order) => !route.stops.some((stop) => stop.serviceOrder?.id === order.id),
+            const availableUrgencies = urgentMissions.filter(
+              (mission) =>
+                !mission.orders.some((order) =>
+                  route.stops.some((stop) => stop.serviceOrder?.id === order.id),
+                ),
             );
             return (
               <article className="route-planner-card" id={route.id} key={route.id}>
@@ -194,7 +218,11 @@ export default function RoutesPage() {
                         <div className="recalculate-controls">
                           <select value={urgentByRoute[route.id] ?? ''} onChange={(event) => setUrgentByRoute({ ...urgentByRoute, [route.id]: event.target.value })}>
                             <option value="">Sem nova urgência</option>
-                            {availableUrgencies.map((order) => <option key={order.id} value={order.id}>{order.code} · {order.recipientName}</option>)}
+                            {availableUrgencies.map((mission) => (
+                              <option key={mission.key} value={mission.representative.id}>
+                                {mission.key} · {mission.orders.map((order) => order.recipientName).join(' → ')}
+                              </option>
+                            ))}
                           </select>
                           <button className="button button-secondary button-small" disabled={recalculating === route.id || route.status === 'COMPLETED'} onClick={() => void recalculate(route)}>{recalculating === route.id ? <span className="spinner small" /> : <Icon name="refresh" />}Recalcular</button>
                         </div>
@@ -207,6 +235,7 @@ export default function RoutesPage() {
                               <div className="stop-line"><span className="stop-number">{stop.type === 'SERVICE' ? index : stop.type === 'DEPOT_START' ? 'S' : 'F'}</span></div>
                               <div className="stop-card">
                                 <div className="stop-card-heading"><div><strong>{stop.label}</strong><small>{stop.address}</small></div><StatusBadge value={stop.status} compact /></div>
+                                {stop.notes ? <p className="stop-notes">{stop.notes.split('\n')[0]}</p> : null}
                                 <div className="stop-meta"><span><Icon name="clock" />{formatTime(stop.plannedArrivalAt)}</span>{stop.distanceFromPreviousM > 0 ? <span><Icon name="distance" />{formatDistance(stop.distanceFromPreviousM)}</span> : null}{stop.serviceOrder ? <StatusBadge value={stop.serviceOrder.priority} compact /> : null}</div>
                                 {canExecute && next ? <button className="button button-ghost button-small stop-action" disabled={busyStop === stop.id} onClick={() => void advanceStop(route, stop)}>{busyStop === stop.id ? <span className="spinner small" /> : <Icon name="check" />}{labelForAction(next)}</button> : null}
                               </div>

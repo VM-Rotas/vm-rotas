@@ -239,7 +239,7 @@ export class RoutesService {
       .filter((order) => order.latitude != null && order.longitude != null);
 
     if (dto.urgentOrderId) {
-      const urgent = await this.prisma.serviceOrder.findFirst({
+      const selectedUrgent = await this.prisma.serviceOrder.findFirst({
         where: {
           id: dto.urgentOrderId,
           organizationId: user.organizationId,
@@ -247,12 +247,29 @@ export class RoutesService {
         },
         include: { customer: true },
       });
-      if (!urgent) throw new BadRequestException('A ordem urgente informada não está disponível.');
-      if (urgent.latitude == null || urgent.longitude == null) {
-        throw new BadRequestException('A ordem urgente ainda não possui coordenadas.');
+      if (!selectedUrgent) {
+        throw new BadRequestException('A missão urgente informada não está disponível.');
       }
-      if (!remainingOrders.some((order) => order.id === urgent.id)) {
-        remainingOrders.push(urgent);
+
+      const urgentOrders = selectedUrgent.externalReference?.startsWith('MIS-')
+        ? await this.prisma.serviceOrder.findMany({
+            where: {
+              organizationId: user.organizationId,
+              externalReference: selectedUrgent.externalReference,
+              status: { in: ['PLANNED', 'READY'] },
+            },
+            include: { customer: true },
+            orderBy: { type: 'desc' },
+          })
+        : [selectedUrgent];
+
+      if (urgentOrders.some((order) => order.latitude == null || order.longitude == null)) {
+        throw new BadRequestException('A missão urgente ainda possui local sem coordenadas.');
+      }
+      for (const urgent of urgentOrders) {
+        if (!remainingOrders.some((order) => order.id === urgent.id)) {
+          remainingOrders.push(urgent);
+        }
       }
     }
 
@@ -571,6 +588,7 @@ export class RoutesService {
   private mapOrder(order: {
     id: string;
     code: string;
+    externalReference: string | null;
     recipientName: string;
     formattedAddress: string | null;
     addressLine: string;
@@ -583,13 +601,17 @@ export class RoutesService {
     volumeM3: unknown;
     timeWindowStart: Date | null;
     timeWindowEnd: Date | null;
+    notes: string | null;
     latitude: unknown;
     longitude: unknown;
   }): OptimizableOrder {
     return {
       id: order.id,
       code: order.code,
-      label: `${order.code} · ${order.recipientName}`,
+      missionId: order.externalReference?.startsWith('MIS-')
+        ? order.externalReference
+        : undefined,
+      label: `${order.type === 'PICKUP' ? 'Coletar em' : 'Entregar em'} ${order.recipientName}`,
       address: order.formattedAddress ?? `${order.addressLine}, ${order.city} - ${order.state}`,
       type: order.type,
       priority: order.priority,
@@ -746,7 +768,7 @@ export class RoutesService {
         {
           type: 'SERVICE' as const,
           sequence: index + 1,
-          label: `${order.code} · ${order.recipientName}`,
+          label: `${order.type === 'PICKUP' ? 'Coletar em' : 'Entregar em'} ${order.recipientName}`,
           address: order.formattedAddress ?? `${order.addressLine}, ${order.city} - ${order.state}`,
           latitude: Number(order.latitude),
           longitude: Number(order.longitude),
@@ -754,6 +776,7 @@ export class RoutesService {
           plannedDepartureAt: visit.plannedDepartureAt,
           distanceFromPreviousM: visit.distanceFromPreviousM,
           durationFromPreviousSec: visit.durationFromPreviousSec,
+          notes: order.notes,
           serviceOrder: { connect: { id: order.id } },
         },
       ];
@@ -804,7 +827,7 @@ export class RoutesService {
         serviceOrderId: order.id,
         type: 'SERVICE',
         sequence: startSequence + index,
-        label: `${order.code} · ${order.recipientName}`,
+        label: `${order.type === 'PICKUP' ? 'Coletar em' : 'Entregar em'} ${order.recipientName}`,
         address: order.formattedAddress ?? `${order.addressLine}, ${order.city} - ${order.state}`,
         latitude: Number(order.latitude),
         longitude: Number(order.longitude),
@@ -812,6 +835,7 @@ export class RoutesService {
         plannedDepartureAt: visit.plannedDepartureAt,
         distanceFromPreviousM: visit.distanceFromPreviousM,
         durationFromPreviousSec: visit.durationFromPreviousSec,
+        notes: order.notes,
       });
     });
     stops.push({

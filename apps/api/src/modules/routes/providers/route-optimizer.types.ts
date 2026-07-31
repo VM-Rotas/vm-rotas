@@ -8,6 +8,7 @@ export interface GeoPoint {
 export interface OptimizableOrder extends GeoPoint {
   id: string;
   code: string;
+  missionId?: string;
   label: string;
   address: string;
   type: 'DELIVERY' | 'PICKUP';

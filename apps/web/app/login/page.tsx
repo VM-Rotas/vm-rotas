@@ -40,12 +40,12 @@ export default function LoginPage() {
         <div className="login-brand"><div className="brand-mark large">VM</div><span>VM Rotas</span></div>
         <div className="login-copy">
           <span className="eyebrow light">Operação em movimento</span>
-          <h1>Entregas e coletas, organizadas em uma única rota inteligente.</h1>
-          <p>Planeje o dia, acompanhe a frota e absorva urgências sem perder o controle da operação.</p>
+          <h1>Missões externas organizadas nas melhores rotas para a equipe.</h1>
+          <p>Organize coletas, entregas, compras e transferências internas sem perder o controle do dia.</p>
           <div className="login-feature-row">
             <div><Icon name="routes" /><span><strong>Otimização</strong> automática</span></div>
             <div><Icon name="refresh" /><span><strong>Recalculo</strong> em tempo real</span></div>
-            <div><Icon name="vehicles" /><span><strong>Frota</strong> centralizada</span></div>
+            <div><Icon name="vehicles" /><span><strong>Veículos</strong> organizados</span></div>
           </div>
         </div>
       </section>
@@ -75,7 +75,7 @@ export default function LoginPage() {
             </div>
           ) : null}
         </form>
-        <p className="login-footer">VM GROUP · Gestão inteligente de rotas</p>
+        <p className="login-footer">VM GROUP · Gestão de missões internas</p>
       </section>
     </main>
   );

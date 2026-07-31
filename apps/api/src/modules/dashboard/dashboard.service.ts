@@ -3,6 +3,19 @@ import type { AuthUser } from '../../common/types/auth-user';
 import { formatDateOnly, parseDateOnly } from '../../common/utils/date.utils';
 import { PrismaService } from '../prisma/prisma.service';
 
+type MissionOrderStatus =
+  | 'PLANNED'
+  | 'READY'
+  | 'ROUTED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED';
+
+type MissionPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
+
+const OPEN_STATUSES: MissionOrderStatus[] = ['PLANNED', 'READY', 'ROUTED', 'IN_PROGRESS'];
+
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
@@ -15,27 +28,21 @@ export class DashboardService {
     } as const;
 
     const [
-      totalOrders,
-      pendingOrders,
-      urgentOrders,
-      completedOrders,
+      orders,
       activeRoutes,
       completedRoutes,
       availableVehicles,
       routes,
     ] = await this.prisma.$transaction([
-      this.prisma.serviceOrder.count({ where: orderWhere }),
-      this.prisma.serviceOrder.count({
-        where: { ...orderWhere, status: { in: ['PLANNED', 'READY', 'ROUTED', 'IN_PROGRESS'] } },
-      }),
-      this.prisma.serviceOrder.count({
-        where: {
-          ...orderWhere,
-          priority: 'URGENT',
-          status: { in: ['PLANNED', 'READY', 'ROUTED', 'IN_PROGRESS'] },
+      this.prisma.serviceOrder.findMany({
+        where: orderWhere,
+        select: {
+          code: true,
+          externalReference: true,
+          status: true,
+          priority: true,
         },
       }),
-      this.prisma.serviceOrder.count({ where: { ...orderWhere, status: 'COMPLETED' } }),
       this.prisma.routePlan.count({
         where: {
           organizationId: user.organizationId,
@@ -67,7 +74,35 @@ export class DashboardService {
       }),
     ]);
 
-    const completionRate = totalOrders === 0 ? 0 : Math.round((completedOrders / totalOrders) * 100);
+    const missions = new Map<
+      string,
+      Array<{ status: MissionOrderStatus; priority: MissionPriority }>
+    >();
+    for (const order of orders) {
+      const key = order.externalReference?.startsWith('MIS-')
+        ? order.externalReference
+        : order.code;
+      missions.set(key, [
+        ...(missions.get(key) ?? []),
+        { status: order.status, priority: order.priority },
+      ]);
+    }
+
+    const grouped = [...missions.values()];
+    const totalOrders = grouped.length;
+    const completedOrders = grouped.filter((mission) =>
+      mission.every((stop) => stop.status === 'COMPLETED'),
+    ).length;
+    const pendingOrders = grouped.filter((mission) =>
+      mission.some((stop) => OPEN_STATUSES.includes(stop.status)),
+    ).length;
+    const urgentOrders = grouped.filter(
+      (mission) =>
+        mission.some((stop) => stop.priority === 'URGENT') &&
+        mission.some((stop) => OPEN_STATUSES.includes(stop.status)),
+    ).length;
+    const completionRate =
+      totalOrders === 0 ? 0 : Math.round((completedOrders / totalOrders) * 100);
 
     return {
       date: formatDateOnly(routeDate),

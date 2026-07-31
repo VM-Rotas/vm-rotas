@@ -94,6 +94,47 @@ describe('LocalRouteOptimizerService', () => {
     assert.ok(result.routes.every((route) => route.encodedPolyline));
   });
 
+  it('mantém coleta e entrega da mesma missão no mesmo veículo e na ordem correta', async () => {
+    const data = context();
+    data.orders = [
+      {
+        id: 'pickup-mission',
+        code: 'MIS-1-C',
+        missionId: 'MIS-1',
+        label: 'Coleta',
+        address: 'Costureira',
+        type: 'PICKUP',
+        priority: 'HIGH',
+        serviceDurationMin: 10,
+        latitude: -23.72,
+        longitude: -51.78,
+      },
+      {
+        id: 'delivery-mission',
+        code: 'MIS-1-E',
+        missionId: 'MIS-1',
+        label: 'Entrega',
+        address: 'Barracão',
+        type: 'DELIVERY',
+        priority: 'HIGH',
+        serviceDurationMin: 10,
+        latitude: -23.86,
+        longitude: -51.85,
+      },
+    ];
+
+    const result = await optimizer().optimize(data);
+    const routeWithMission = result.routes.find((route) =>
+      route.visits.some((visit) => visit.orderId === 'pickup-mission'),
+    );
+
+    assert.ok(routeWithMission);
+    assert.deepEqual(
+      routeWithMission.visits.map((visit) => visit.orderId),
+      ['pickup-mission', 'delivery-mission'],
+    );
+  });
+
   it('marca uma ordem como não alocada quando ela excede toda a capacidade', async () => {
     const data = context();
     data.orders = [
