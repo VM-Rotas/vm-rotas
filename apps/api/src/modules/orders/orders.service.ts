@@ -22,6 +22,7 @@ interface MissionPointInput {
   latitude?: number;
   longitude?: number;
   city?: string;
+  neighborhood?: string;
   state?: string;
   item: string;
   time?: string;
@@ -94,6 +95,7 @@ export class OrdersService {
       latitude: dto.pickupLatitude,
       longitude: dto.pickupLongitude,
       city: dto.pickupCity,
+      neighborhood: dto.pickupNeighborhood,
       state: dto.pickupState,
       item: dto.pickupItem,
       time: dto.pickupTime,
@@ -105,6 +107,7 @@ export class OrdersService {
       latitude: dto.deliveryLatitude,
       longitude: dto.deliveryLongitude,
       city: dto.deliveryCity,
+      neighborhood: dto.deliveryNeighborhood,
       state: dto.deliveryState,
       item: dto.deliveryItem,
       time: dto.deliveryTime,
@@ -130,9 +133,10 @@ export class OrdersService {
                 formattedAddress: point.formattedAddress ?? point.address,
                 placeId: 'selected-address',
                 city: point.city,
+                neighborhood: point.neighborhood,
                 state: point.state,
               }
-            : await this.tryGeocode(point.address),
+            : await this.tryGeocode(this.missionSearchAddress(point)),
       })),
     );
 
@@ -141,10 +145,11 @@ export class OrdersService {
 
       for (const { point, geocoded } of geocodedPoints) {
         const inferredLocation = this.inferCityAndState(
-          point.formattedAddress ?? geocoded?.formattedAddress ?? point.address,
+          point.formattedAddress ?? geocoded?.formattedAddress ?? this.missionSearchAddress(point),
         );
         const location = {
           city: point.city ?? geocoded?.city ?? inferredLocation.city,
+          neighborhood: point.neighborhood ?? geocoded?.neighborhood,
           state: (point.state ?? geocoded?.state ?? inferredLocation.state).toUpperCase(),
         };
         const typeSuffix = point.type === 'PICKUP' ? 'C' : 'E';
@@ -168,10 +173,13 @@ export class OrdersService {
             serviceDurationMin: 10,
             recipientName: point.name.trim(),
             addressLine: point.address.trim(),
+            neighborhood: location.neighborhood?.trim() || null,
             city: location.city,
             state: location.state,
             formattedAddress:
-              point.formattedAddress ?? geocoded?.formattedAddress ?? point.address.trim(),
+              point.formattedAddress ??
+              geocoded?.formattedAddress ??
+              this.missionSearchAddress(point),
             latitude: point.latitude ?? geocoded?.latitude,
             longitude: point.longitude ?? geocoded?.longitude,
             notes: this.buildMissionNotes(point.item, dto.notes),
@@ -502,6 +510,7 @@ export class OrdersService {
       latitude?: number;
       longitude?: number;
       city?: string;
+      neighborhood?: string;
       state?: string;
       item?: string;
       time?: string;
@@ -512,10 +521,15 @@ export class OrdersService {
     );
     if (!supplied) return null;
 
-    if (!values.name?.trim() || !values.address?.trim() || !values.item?.trim()) {
+    if (
+      !values.name?.trim() ||
+      !values.address?.trim() ||
+      !values.city?.trim() ||
+      !values.item?.trim()
+    ) {
       const label = type === 'PICKUP' ? 'coleta' : 'entrega';
       throw new BadRequestException(
-        `Preencha nome/local, endereço e o que será feito na ${label}.`,
+        `Preencha nome/local, endereço, cidade e o que será feito na ${label}.`,
       );
     }
 
@@ -533,11 +547,23 @@ export class OrdersService {
       formattedAddress: values.formattedAddress?.trim() || undefined,
       latitude: values.latitude,
       longitude: values.longitude,
-      city: values.city?.trim() || undefined,
-      state: values.state?.trim().toUpperCase() || undefined,
+      city: values.city.trim(),
+      neighborhood: values.neighborhood?.trim() || undefined,
+      state: values.state?.trim().toUpperCase() || 'PR',
       item: values.item.trim(),
       time: values.time?.trim() || undefined,
     };
+  }
+
+  private missionSearchAddress(point: MissionPointInput): string {
+    return [
+      point.address,
+      point.neighborhood,
+      `${point.city} - ${point.state ?? 'PR'}`,
+      'Brasil',
+    ]
+      .filter(Boolean)
+      .join(', ');
   }
 
   private async tryGeocode(address: string) {

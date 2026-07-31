@@ -53,7 +53,9 @@ export interface AddressSuggestion {
   latitude: number;
   longitude: number;
   city?: string;
+  neighborhood?: string;
   state?: string;
+  postalCode?: string;
   source: 'HISTORY' | 'OPENSTREETMAP';
 }
 

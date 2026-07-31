@@ -59,6 +59,13 @@ export class CreateMissionDto {
   @Max(180)
   pickupLongitude?: number;
 
+
+  @ApiPropertyOptional({ example: 'Centro' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  pickupNeighborhood?: string;
+
   @ApiPropertyOptional({ example: 'Marialva' })
   @IsOptional()
   @IsString()
@@ -113,6 +120,13 @@ export class CreateMissionDto {
   @Min(-180)
   @Max(180)
   deliveryLongitude?: number;
+
+
+  @ApiPropertyOptional({ example: 'Centro' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  deliveryNeighborhood?: string;
 
   @ApiPropertyOptional({ example: 'Marialva' })
   @IsOptional()

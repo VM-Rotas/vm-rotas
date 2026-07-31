@@ -52,7 +52,9 @@ export interface AddressSuggestion {
   latitude: number;
   longitude: number;
   city?: string;
+  neighborhood?: string;
   state?: string;
+  postalCode?: string;
   source: 'HISTORY' | 'OPENSTREETMAP';
 }
 
@@ -62,7 +64,9 @@ export interface GeocodedAddress {
   formattedAddress: string;
   placeId: string;
   city?: string;
+  neighborhood?: string;
   state?: string;
+  postalCode?: string;
 }
 
 interface CacheEntry {
@@ -150,7 +154,9 @@ export class MapsService {
           formattedAddress: result.label,
           placeId: result.id,
           city: result.city,
+          neighborhood: result.neighborhood,
           state: result.state,
+          postalCode: result.postalCode,
         };
       }
     } catch {
@@ -234,7 +240,9 @@ export class MapsService {
         addressLine: true,
         formattedAddress: true,
         city: true,
+        neighborhood: true,
         state: true,
+        postalCode: true,
         latitude: true,
         longitude: true,
       },
@@ -261,7 +269,9 @@ export class MapsService {
           latitude,
           longitude,
           city: row.city,
+          neighborhood: row.neighborhood ?? undefined,
           state: this.normalizeBrazilState(row.state),
+          postalCode: row.postalCode ?? undefined,
           source: 'HISTORY',
         },
       ];
@@ -297,7 +307,7 @@ export class MapsService {
       headers: {
         Accept: 'application/geo+json, application/json',
         'Accept-Language': 'pt-BR,pt;q=0.9',
-        'User-Agent': 'VM-Rotas/0.3 address-search',
+        'User-Agent': 'VM-Rotas/0.4 address-search',
       },
       signal: AbortSignal.timeout(8_000),
     });
@@ -328,7 +338,13 @@ export class MapsService {
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
 
     const city =
-      properties.city || properties.locality || properties.district || properties.county;
+      properties.city || properties.locality || properties.county || properties.district;
+    const neighborhood =
+      properties.district && properties.district !== city
+        ? properties.district
+        : properties.locality && properties.locality !== city
+          ? properties.locality
+          : undefined;
     const state = this.normalizeBrazilState(properties.state);
     const street = properties.street?.trim();
     const number = properties.housenumber?.trim();
@@ -364,7 +380,9 @@ export class MapsService {
         latitude,
         longitude,
         city,
+        neighborhood,
         state,
+        postalCode: properties.postcode,
         source: 'OPENSTREETMAP',
       },
     ];

@@ -665,3 +665,125 @@ h1, h2, h3, p { margin-top: 0; }
   .address-suggestion-copy strong,
   .address-suggestion-copy small { white-space: normal; }
 }
+
+/* VM Rotas v0.4 — cadastro e visualização prática de missões */
+.mission-date-field { width: min(230px, 100%); }
+.priority-fieldset { margin: 0; padding: 0; border: 0; }
+.priority-fieldset legend { margin-bottom: .48rem; color: var(--muted); font-size: .78rem; font-weight: 720; }
+.priority-selector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; }
+.priority-option {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  padding: .7rem .75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.priority-option:hover { border-color: #bdd1cc; background: var(--surface); }
+.priority-option input { width: 17px; height: 17px; margin: 0; accent-color: var(--primary); }
+.priority-option > span { min-width: 0; display: flex; flex-direction: column; gap: .06rem; }
+.priority-option strong { font-size: .8rem; }
+.priority-option small { color: var(--muted); font-size: .62rem; line-height: 1.25; }
+.priority-option.is-selected { border-color: #91bdb5; background: #f0f8f6; box-shadow: 0 0 0 2px rgba(15, 90, 92, .07); }
+.priority-option-high.is-selected { border-color: #ddb978; background: var(--warning-light); }
+.priority-option-urgent.is-selected { border-color: #e0a8a5; background: var(--danger-light); }
+.mission-location-row { grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); }
+
+.address-autocomplete-control.is-selected input { border-color: #8ec5ae; padding-right: 2.55rem; }
+.address-selected-icon {
+  position: absolute;
+  right: .78rem;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--success);
+  transform: translateY(-50%);
+}
+.address-selected-icon svg { width: 13px; height: 13px; }
+.address-selected-text {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  color: var(--success);
+  font-size: .68rem;
+  font-weight: 720;
+}
+.address-selected-text svg { width: 13px; height: 13px; }
+
+.mission-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
+.mission-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-left: 4px solid #9eb0ad;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.mission-card.priority-high { border-left-color: var(--accent); }
+.mission-card.priority-urgent { border-left-color: var(--danger); }
+.mission-card.priority-low { border-left-color: #aeb8b6; }
+.mission-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .85rem;
+  padding: 1rem 1.05rem .9rem;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #fff, #fbfcfc);
+}
+.mission-card-title { min-width: 0; }
+.mission-card-title > span { color: var(--primary); font-size: .65rem; font-weight: 820; text-transform: uppercase; letter-spacing: .08em; }
+.mission-card-title h2 { margin: .2rem 0 .1rem; overflow: hidden; font-size: 1rem; line-height: 1.28; text-overflow: ellipsis; white-space: nowrap; }
+.mission-card-title small { color: var(--muted-2); font-size: .62rem; }
+.mission-card-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .35rem; }
+.mission-card-flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: .7rem; padding: .9rem 1rem 1rem; }
+.mission-card-flow.has-two-stops { grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr); align-items: stretch; }
+.mission-flow-arrow { display: grid; place-items: center; color: var(--primary); }
+.mission-flow-arrow svg { width: 20px; height: 20px; }
+.mission-stop {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: .85rem;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-soft);
+}
+.mission-stop-delivery { background: #f6faf9; }
+.mission-stop-kicker { display: flex; align-items: center; gap: .42rem; color: var(--primary); font-size: .66rem; font-weight: 820; text-transform: uppercase; letter-spacing: .07em; }
+.mission-stop-kicker > span { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: var(--primary-light); }
+.mission-stop-kicker svg { width: 14px; height: 14px; }
+.mission-stop h3 { margin: .58rem 0 .2rem; overflow: hidden; font-size: .9rem; text-overflow: ellipsis; white-space: nowrap; }
+.mission-stop-item { margin: 0 0 .72rem; color: var(--ink); font-size: .78rem; line-height: 1.38; }
+.mission-stop-address { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: .42rem; margin-top: auto; color: var(--muted); font-size: .7rem; line-height: 1.35; }
+.mission-stop-address > svg { width: 15px; height: 15px; color: var(--primary); margin-top: .05rem; }
+.mission-stop-address > span { min-width: 0; }
+.mission-stop-address small { display: block; margin-top: .18rem; color: var(--primary); font-size: .66rem; font-weight: 720; }
+.mission-stop-time { display: inline-flex; align-items: center; gap: .3rem; margin-top: .55rem; color: var(--warning); font-size: .68rem; font-weight: 760; }
+.mission-stop-time svg { width: 14px; height: 14px; }
+.mission-navigation-actions { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .72rem; }
+.mission-navigation-actions .button { flex: 1 1 auto; min-width: 105px; }
+.mission-card-footer { display: flex; justify-content: flex-end; padding: .65rem 1rem; border-top: 1px solid var(--line); background: #fbfcfc; }
+
+@media (max-width: 1120px) {
+  .mission-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  .priority-selector { grid-template-columns: 1fr; }
+  .priority-option { min-height: 58px; }
+  .mission-location-row { grid-template-columns: 1fr; }
+  .mission-card-header { flex-direction: column; }
+  .mission-card-badges { justify-content: flex-start; }
+  .mission-card-flow.has-two-stops { grid-template-columns: 1fr; }
+  .mission-flow-arrow { transform: rotate(90deg); min-height: 18px; }
+  .mission-card-title h2 { white-space: normal; }
+}

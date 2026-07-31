@@ -17,6 +17,7 @@ interface AddressAutocompleteProps {
   placeholder?: string;
   required?: boolean;
   disabled?: boolean;
+  selected?: boolean;
   onValueChange: (value: string) => void;
   onSelect: (suggestion: AddressSuggestion) => void;
 }
@@ -27,6 +28,7 @@ export function AddressAutocomplete({
   placeholder,
   required,
   disabled,
+  selected = false,
   onValueChange,
   onSelect,
 }: AddressAutocompleteProps) {
@@ -37,7 +39,6 @@ export function AddressAutocomplete({
   const lastSelectedValueRef = useRef('');
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
 
@@ -62,7 +63,6 @@ export function AddressAutocomplete({
     ) {
       setSuggestions([]);
       setLoading(false);
-      setMessage('');
       setActiveIndex(-1);
       return;
     }
@@ -70,7 +70,6 @@ export function AddressAutocomplete({
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setLoading(true);
-      setMessage('');
       try {
         const result = await api<AddressSuggestion[]>(
           `/maps/address-suggestions${queryString({ query, limit: 6 })}`,
@@ -79,17 +78,18 @@ export function AddressAutocomplete({
         if (controller.signal.aborted) return;
         setSuggestions(result);
         setActiveIndex(result.length > 0 ? 0 : -1);
-        setMessage(result.length === 0 ? 'Nenhum endereço encontrado. Você ainda pode digitar manualmente.' : '');
-        if (focusedRef.current) setOpen(true);
-      } catch (caught) {
+        setOpen(focusedRef.current && result.length > 0);
+      } catch {
         if (controller.signal.aborted) return;
+        // A missão continua podendo ser cadastrada manualmente.
+        // Não exibimos uma mensagem de erro técnico ao usuário.
         setSuggestions([]);
         setActiveIndex(-1);
-        setMessage('A busca está indisponível agora. Você ainda pode digitar o endereço manualmente.');
+        setOpen(false);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
-    }, 650);
+    }, 550);
 
     return () => {
       window.clearTimeout(timer);
@@ -102,14 +102,13 @@ export function AddressAutocomplete({
       lastSelectedValueRef.current = '';
     }
     onValueChange(nextValue);
-    setOpen(nextValue.trim().length >= 3);
+    setOpen(nextValue.trim().length >= 3 && suggestions.length > 0);
   }
 
   function chooseSuggestion(suggestion: AddressSuggestion) {
     lastSelectedValueRef.current = suggestion.label;
     onSelect(suggestion);
     setSuggestions([]);
-    setMessage('');
     setActiveIndex(-1);
     setOpen(false);
   }
@@ -130,20 +129,19 @@ export function AddressAutocomplete({
       );
     } else if (event.key === 'Enter' && activeIndex >= 0) {
       event.preventDefault();
-      const selected = suggestions[activeIndex];
-      if (selected) chooseSuggestion(selected);
+      const selectedSuggestion = suggestions[activeIndex];
+      if (selectedSuggestion) chooseSuggestion(selectedSuggestion);
     } else if (event.key === 'Escape') {
       setOpen(false);
     }
   }
 
-  const showPanel =
-    open && value.trim().length >= 3 && (loading || suggestions.length > 0 || Boolean(message));
+  const showPanel = open && suggestions.length > 0;
 
   return (
     <div className="field address-autocomplete" ref={wrapperRef}>
       <label htmlFor={inputId}>{label}</label>
-      <div className="address-autocomplete-control">
+      <div className={`address-autocomplete-control${selected ? ' is-selected' : ''}`}>
         <Icon name="pin" />
         <input
           id={inputId}
@@ -163,7 +161,7 @@ export function AddressAutocomplete({
           }
           onFocus={() => {
             focusedRef.current = true;
-            if (value.trim().length >= 3) setOpen(true);
+            if (suggestions.length > 0) setOpen(true);
           }}
           onBlur={() => {
             window.setTimeout(() => {
@@ -177,47 +175,44 @@ export function AddressAutocomplete({
           onKeyDown={handleKeyDown}
         />
         {loading ? <span className="spinner small address-autocomplete-spinner" /> : null}
+        {!loading && selected ? (
+          <span className="address-selected-icon" title="Endereço localizado">
+            <Icon name="check" />
+          </span>
+        ) : null}
       </div>
+
+      {selected ? (
+        <span className="address-selected-text"><Icon name="check" />Endereço localizado</span>
+      ) : (
+        <span className="field-help">Digite rua e número. Se não aparecer sugestão, continue manualmente.</span>
+      )}
 
       {showPanel ? (
         <div className="address-suggestions" role="presentation">
-          {suggestions.length > 0 ? (
-            <div id={listboxId} role="listbox" aria-label={`Sugestões para ${label}`}>
-              {suggestions.map((suggestion, index) => (
-                <button
-                  id={`${listboxId}-option-${index}`}
-                  key={suggestion.id}
-                  type="button"
-                  role="option"
-                  aria-selected={activeIndex === index}
-                  className={`address-suggestion${activeIndex === index ? ' is-active' : ''}`}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => chooseSuggestion(suggestion)}
-                >
-                  <span className="address-suggestion-pin"><Icon name="pin" /></span>
-                  <span className="address-suggestion-copy">
-                    <strong>{suggestion.primaryText}</strong>
-                    {suggestion.secondaryText ? <small>{suggestion.secondaryText}</small> : null}
-                  </span>
-                  {suggestion.source === 'HISTORY' ? (
-                    <span className="address-suggestion-source">Já usado</span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          {message ? <p className="address-suggestion-message">{message}</p> : null}
-          <div className="address-suggestion-footer">
-            Sugestões de mapa por{' '}
-            <a
-              href="https://www.openstreetmap.org/copyright"
-              target="_blank"
-              rel="noreferrer"
-            >
-              OpenStreetMap
-            </a>
+          <div id={listboxId} role="listbox" aria-label={`Sugestões para ${label}`}>
+            {suggestions.map((suggestion, index) => (
+              <button
+                id={`${listboxId}-option-${index}`}
+                key={suggestion.id}
+                type="button"
+                role="option"
+                aria-selected={activeIndex === index}
+                className={`address-suggestion${activeIndex === index ? ' is-active' : ''}`}
+                onMouseEnter={() => setActiveIndex(index)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => chooseSuggestion(suggestion)}
+              >
+                <span className="address-suggestion-pin"><Icon name="pin" /></span>
+                <span className="address-suggestion-copy">
+                  <strong>{suggestion.primaryText}</strong>
+                  {suggestion.secondaryText ? <small>{suggestion.secondaryText}</small> : null}
+                </span>
+                {suggestion.source === 'HISTORY' ? (
+                  <span className="address-suggestion-source">Já usado</span>
+                ) : null}
+              </button>
+            ))}
           </div>
         </div>
       ) : null}
