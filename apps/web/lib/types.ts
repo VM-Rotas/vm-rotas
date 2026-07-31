@@ -26,6 +26,8 @@ export interface ServiceOrder {
   status: OrderStatus;
   priority: OrderPriority;
   plannedDate: string;
+  timeWindowStart?: string | null;
+  timeWindowEnd?: string | null;
   serviceDurationMin: number;
   weightKg?: string | number | null;
   volumeM3?: string | number | null;
