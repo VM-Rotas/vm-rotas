@@ -284,12 +284,11 @@ export default function OrdersPage() {
       ...current,
       pickupAddress: value,
       pickupFormattedAddress: '',
-  pickupAddressNumber: '',
-  pickupAddressComplement: '',
-  pickupPostalCode: '',
+      pickupAddressNumber: '',
+      pickupAddressComplement: '',
+      pickupPostalCode: '',
       pickupLatitude: undefined,
       pickupLongitude: undefined,
-      pickupPostalCode: '',
     }));
   }
 
@@ -312,12 +311,11 @@ export default function OrdersPage() {
       ...current,
       deliveryAddress: value,
       deliveryFormattedAddress: '',
-  deliveryAddressNumber: '',
-  deliveryAddressComplement: '',
-  deliveryPostalCode: '',
+      deliveryAddressNumber: '',
+      deliveryAddressComplement: '',
+      deliveryPostalCode: '',
       deliveryLatitude: undefined,
       deliveryLongitude: undefined,
-      deliveryPostalCode: '',
     }));
   }
 
