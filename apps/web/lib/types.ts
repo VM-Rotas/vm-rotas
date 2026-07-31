@@ -26,8 +26,6 @@ export interface ServiceOrder {
   status: OrderStatus;
   priority: OrderPriority;
   plannedDate: string;
-  timeWindowStart?: string | null;
-  timeWindowEnd?: string | null;
   serviceDurationMin: number;
   weightKg?: string | number | null;
   volumeM3?: string | number | null;
@@ -35,28 +33,29 @@ export interface ServiceOrder {
   recipientPhone?: string | null;
   addressLine: string;
   addressNumber?: string | null;
+  addressComplement?: string | null;
   neighborhood?: string | null;
   city: string;
   state: string;
+  postalCode?: string | null;
   formattedAddress?: string | null;
   latitude?: string | number | null;
   longitude?: string | number | null;
   notes?: string | null;
 }
 
-
 export interface AddressSuggestion {
   id: string;
   label: string;
-  primaryText: string;
-  secondaryText?: string;
+  addressLine: string;
+  formattedAddress?: string | null;
+  city?: string | null;
+  neighborhood?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
   latitude: number;
   longitude: number;
-  city?: string;
-  neighborhood?: string;
-  state?: string;
-  postalCode?: string;
-  source: 'HISTORY' | 'OPENSTREETMAP';
+  source?: string | null;
 }
 
 export interface Vehicle {
@@ -86,10 +85,7 @@ export interface RouteStop {
   distanceFromPreviousM: number;
   durationFromPreviousSec: number;
   notes?: string | null;
-  serviceOrder?: Pick<
-    ServiceOrder,
-    'id' | 'code' | 'priority' | 'type' | 'recipientPhone'
-  > | null;
+  serviceOrder?: Pick<ServiceOrder, 'id' | 'code' | 'priority' | 'type' | 'recipientPhone'> | null;
 }
 
 export interface RoutePlan {
