@@ -41,6 +41,7 @@ export function AddressAutocomplete({
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [lastCompletedQuery, setLastCompletedQuery] = useState('');
 
   useEffect(() => {
     function closeOnOutsideClick(event: PointerEvent) {
@@ -64,6 +65,7 @@ export function AddressAutocomplete({
       setSuggestions([]);
       setLoading(false);
       setActiveIndex(-1);
+      setLastCompletedQuery('');
       return;
     }
 
@@ -79,17 +81,17 @@ export function AddressAutocomplete({
         setSuggestions(result);
         setActiveIndex(result.length > 0 ? 0 : -1);
         setOpen(focusedRef.current && result.length > 0);
+        setLastCompletedQuery(query);
       } catch {
         if (controller.signal.aborted) return;
-        // A missão continua podendo ser cadastrada manualmente.
-        // Não exibimos uma mensagem de erro técnico ao usuário.
         setSuggestions([]);
         setActiveIndex(-1);
         setOpen(false);
+        setLastCompletedQuery(query);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
-    }, 550);
+    }, 700);
 
     return () => {
       window.clearTimeout(timer);
@@ -101,6 +103,7 @@ export function AddressAutocomplete({
     if (nextValue !== lastSelectedValueRef.current) {
       lastSelectedValueRef.current = '';
     }
+    setLastCompletedQuery('');
     onValueChange(nextValue);
     setOpen(nextValue.trim().length >= 3 && suggestions.length > 0);
   }
@@ -110,6 +113,7 @@ export function AddressAutocomplete({
     onSelect(suggestion);
     setSuggestions([]);
     setActiveIndex(-1);
+    setLastCompletedQuery('');
     setOpen(false);
   }
 
@@ -136,7 +140,14 @@ export function AddressAutocomplete({
     }
   }
 
+  const normalizedValue = value.trim().replace(/\s+/g, ' ');
   const showPanel = open && suggestions.length > 0;
+  const showNoResults =
+    !selected &&
+    !loading &&
+    normalizedValue.length >= 3 &&
+    lastCompletedQuery === normalizedValue &&
+    suggestions.length === 0;
 
   return (
     <div className="field address-autocomplete" ref={wrapperRef}>
@@ -184,8 +195,10 @@ export function AddressAutocomplete({
 
       {selected ? (
         <span className="address-selected-text"><Icon name="check" />Endereço localizado</span>
+      ) : showNoResults ? (
+        <span className="field-help">Não encontramos ainda. Digite também o número e a cidade.</span>
       ) : (
-        <span className="field-help">Digite rua e número. Se não aparecer sugestão, continue manualmente.</span>
+        <span className="field-help">Comece pela rua. Para maior precisão, inclua número e cidade.</span>
       )}
 
       {showPanel ? (
@@ -205,8 +218,16 @@ export function AddressAutocomplete({
               >
                 <span className="address-suggestion-pin"><Icon name="pin" /></span>
                 <span className="address-suggestion-copy">
-                  <strong>{suggestion.primaryText}</strong>
-                  {suggestion.secondaryText ? <small>{suggestion.secondaryText}</small> : null}
+                  <strong>{suggestion.addressLine || suggestion.label}</strong>
+                  {[suggestion.neighborhood, suggestion.city, suggestion.state]
+                    .filter(Boolean)
+                    .join(' • ') ? (
+                    <small>
+                      {[suggestion.neighborhood, suggestion.city, suggestion.state]
+                        .filter(Boolean)
+                        .join(' • ')}
+                    </small>
+                  ) : null}
                 </span>
                 {suggestion.source === 'HISTORY' ? (
                   <span className="address-suggestion-source">Já usado</span>
