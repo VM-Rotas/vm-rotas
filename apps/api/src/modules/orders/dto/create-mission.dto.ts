@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsIn,
   IsNumber,
   IsOptional,
@@ -75,6 +76,10 @@ export class CreateMissionDto {
   @Max(180)
   pickupLongitude?: number;
 
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  pickupLocationConfirmed?: boolean;
 
   @ApiPropertyOptional({ example: 'Centro' })
   @IsOptional()
@@ -153,6 +158,10 @@ export class CreateMissionDto {
   @Max(180)
   deliveryLongitude?: number;
 
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  deliveryLocationConfirmed?: boolean;
 
   @ApiPropertyOptional({ example: 'Centro' })
   @IsOptional()

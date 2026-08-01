@@ -13,6 +13,7 @@ interface GoogleGeocodeResponse {
         lat: number;
         lng: number;
       };
+      location_type?: 'ROOFTOP' | 'RANGE_INTERPOLATED' | 'GEOMETRIC_CENTER' | 'APPROXIMATE';
     };
   }>;
 }
@@ -37,6 +38,13 @@ interface GeoapifyResult {
   address_line1?: string;
   address_line2?: string;
   place_id?: string;
+  result_type?: string;
+  rank?: {
+    confidence?: number;
+    confidence_building_level?: number;
+    confidence_street_level?: number;
+    match_type?: string;
+  };
 }
 
 interface GeoapifyResponse {
@@ -70,11 +78,16 @@ interface PhotonResponse {
   features?: PhotonFeature[];
 }
 
+export type LocationAccuracy = 'BUILDING' | 'STREET' | 'AREA' | 'UNKNOWN';
+
 export interface AddressSuggestion {
   id: string;
   label: string;
   primaryText: string;
   secondaryText?: string;
+  addressLine: string;
+  addressNumber?: string;
+  formattedAddress?: string;
   latitude: number;
   longitude: number;
   city?: string;
@@ -93,6 +106,10 @@ export interface GeocodedAddress {
   neighborhood?: string;
   state?: string;
   postalCode?: string;
+  accuracy?: LocationAccuracy;
+  confidence?: number;
+  buildingConfidence?: number;
+  matchType?: string;
 }
 
 interface CacheEntry {
@@ -172,8 +189,8 @@ export class MapsService {
     const geoapifyApiKey = this.config.get<string>('GEOAPIFY_API_KEY')?.trim();
     if (geoapifyApiKey) {
       try {
-        const result = (await this.geoapifySuggestions(normalizedAddress, 1, geoapifyApiKey))[0];
-        if (result) return this.suggestionToGeocodedAddress(result);
+        const result = await this.geoapifyGeocode(normalizedAddress, geoapifyApiKey);
+        if (result) return result;
       } catch (error) {
         this.logger.warn(`Geoapify não respondeu ao geocodificar: ${this.errorMessage(error)}`);
       }
@@ -255,11 +272,19 @@ export class MapsService {
     }
 
     const first = payload.results[0];
+    const locationType = first.geometry.location_type;
     return {
       latitude: first.geometry.location.lat,
       longitude: first.geometry.location.lng,
       formattedAddress: first.formatted_address,
       placeId: first.place_id,
+      accuracy:
+        locationType === 'ROOFTOP'
+          ? 'BUILDING'
+          : locationType === 'RANGE_INTERPOLATED'
+            ? 'STREET'
+            : 'AREA',
+      matchType: locationType,
     };
   }
 
@@ -284,6 +309,7 @@ export class MapsService {
         id: true,
         recipientName: true,
         addressLine: true,
+        addressNumber: true,
         formattedAddress: true,
         city: true,
         neighborhood: true,
@@ -312,6 +338,9 @@ export class MapsService {
           label,
           primaryText: row.recipientName || row.addressLine,
           secondaryText: label,
+          addressLine: row.addressLine,
+          addressNumber: row.addressNumber ?? undefined,
+          formattedAddress: label,
           latitude,
           longitude,
           city: row.city,
@@ -375,6 +404,89 @@ export class MapsService {
     return value;
   }
 
+  private async geoapifyGeocode(
+    query: string,
+    apiKey: string,
+  ): Promise<GeocodedAddress | null> {
+    if (query.length < 3) return null;
+
+    const lat = this.config.get<number>('ADDRESS_SEARCH_LAT', -23.865);
+    const lon = this.config.get<number>('ADDRESS_SEARCH_LON', -51.856);
+    const params = new URLSearchParams({
+      text: query,
+      format: 'json',
+      limit: '1',
+      lang: 'pt',
+      filter: 'countrycode:br',
+      bias: `proximity:${lon},${lat}`,
+      apiKey,
+    });
+    const response = await fetch(
+      `https://api.geoapify.com/v1/geocode/search?${params.toString()}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+        },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+
+    if (!response.ok) {
+      throw new ServiceUnavailableException(
+        `Geoapify geocoding respondeu com HTTP ${response.status}.`,
+      );
+    }
+
+    const payload = (await response.json()) as GeoapifyResponse;
+    const result = payload.results?.[0];
+    if (!result) return null;
+
+    const latitude = Number(result.lat);
+    const longitude = Number(result.lon);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+    const buildingConfidence = Number(result.rank?.confidence_building_level);
+    const confidence = Number(result.rank?.confidence);
+    const resultType = result.result_type?.toLocaleLowerCase('pt-BR');
+    const accuracy: LocationAccuracy =
+      Boolean(result.housenumber) &&
+      ['building', 'amenity'].includes(resultType ?? '') &&
+      (!Number.isFinite(buildingConfidence) || buildingConfidence >= 0.5)
+        ? 'BUILDING'
+        : result.street
+          ? 'STREET'
+          : result.city || result.district || result.suburb
+            ? 'AREA'
+            : 'UNKNOWN';
+
+    return {
+      latitude,
+      longitude,
+      formattedAddress:
+        result.formatted?.trim() ||
+        this.uniqueParts([
+          [result.street, result.housenumber].filter(Boolean).join(', '),
+          result.suburb || result.district,
+          result.city,
+          result.state,
+          result.postcode,
+          result.country || 'Brasil',
+        ]).join(', '),
+      placeId: result.place_id ?? `geoapify:${latitude}:${longitude}`,
+      city: result.city || result.county,
+      neighborhood: result.suburb || result.district || result.quarter,
+      state: this.normalizeBrazilState(result.state_code || result.state),
+      postalCode: result.postcode,
+      accuracy,
+      confidence: Number.isFinite(confidence) ? confidence : undefined,
+      buildingConfidence: Number.isFinite(buildingConfidence)
+        ? buildingConfidence
+        : undefined,
+      matchType: result.rank?.match_type,
+    };
+  }
+
   private geoapifyResultToSuggestion(result: GeoapifyResult): AddressSuggestion[] {
     const latitude = Number(result.lat);
     const longitude = Number(result.lon);
@@ -408,6 +520,9 @@ export class MapsService {
         label,
         primaryText,
         secondaryText: secondaryText || undefined,
+        addressLine: result.street?.trim() || result.address_line1?.trim() || primaryText,
+        addressNumber: result.housenumber?.trim() || undefined,
+        formattedAddress: label,
         latitude,
         longitude,
         city: result.city || result.county,
@@ -512,6 +627,9 @@ export class MapsService {
         label,
         primaryText,
         secondaryText: secondaryText || undefined,
+        addressLine: street || placeName || primaryText,
+        addressNumber: number || undefined,
+        formattedAddress: label,
         latitude,
         longitude,
         city,
@@ -527,12 +645,13 @@ export class MapsService {
     return {
       latitude: suggestion.latitude,
       longitude: suggestion.longitude,
-      formattedAddress: suggestion.label,
+      formattedAddress: suggestion.formattedAddress || suggestion.label,
       placeId: suggestion.id,
       city: suggestion.city,
       neighborhood: suggestion.neighborhood,
       state: suggestion.state,
       postalCode: suggestion.postalCode,
+      accuracy: suggestion.addressNumber ? 'BUILDING' : suggestion.addressLine ? 'STREET' : 'AREA',
     };
   }
 

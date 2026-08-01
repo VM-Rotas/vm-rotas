@@ -5,6 +5,10 @@ import { useAuth } from '@/components/auth-provider';
 import { EmptyState, ErrorBanner, LoadingBlock, SuccessBanner } from '@/components/feedback';
 import { Icon } from '@/components/icons';
 import { PageHeader } from '@/components/page-header';
+import {
+  PreciseLocationPicker,
+  type ConfirmedLocationUpdate,
+} from '@/components/precise-location-picker';
 import { StatusBadge } from '@/components/status-badge';
 import { api, ApiError, queryString } from '@/lib/api';
 import { formatTime, todayDateInput } from '@/lib/format';
@@ -22,6 +26,7 @@ interface MissionForm {
   pickupPostalCode: string;
   pickupLatitude?: number;
   pickupLongitude?: number;
+  pickupLocationConfirmed: boolean;
   pickupCity: string;
   pickupNeighborhood: string;
   pickupState: string;
@@ -36,6 +41,7 @@ interface MissionForm {
   deliveryPostalCode: string;
   deliveryLatitude?: number;
   deliveryLongitude?: number;
+  deliveryLocationConfirmed: boolean;
   deliveryCity: string;
   deliveryNeighborhood: string;
   deliveryState: string;
@@ -65,6 +71,7 @@ const initialForm: MissionForm = {
   pickupPostalCode: '',
   pickupLatitude: undefined,
   pickupLongitude: undefined,
+  pickupLocationConfirmed: false,
   pickupCity: '',
   pickupNeighborhood: '',
   pickupState: 'PR',
@@ -79,6 +86,7 @@ const initialForm: MissionForm = {
   deliveryPostalCode: '',
   deliveryLatitude: undefined,
   deliveryLongitude: undefined,
+  deliveryLocationConfirmed: false,
   deliveryCity: '',
   deliveryNeighborhood: '',
   deliveryState: 'PR',
@@ -166,10 +174,9 @@ function navigationDestination(order: ServiceOrder): string {
     .filter(Boolean)
     .join(', ');
 
-  // Quando existe número, enviamos o endereço completo ao aplicativo de GPS.
-  // Isso é mais confiável do que usar a coordenada aproximada do centro da rua.
-  if (order.addressNumber) return fullAddress;
-
+  // As missões novas exigem a confirmação do pino no mapa. Por isso,
+  // quando existem coordenadas, Google Maps e Waze recebem exatamente o ponto
+  // confirmado pelo usuário, inclusive a entrada correta do imóvel.
   const coordinates = validCoordinates(order);
   if (coordinates) return `${coordinates.latitude},${coordinates.longitude}`;
   return fullAddress || order.formattedAddress || order.addressLine;
@@ -289,20 +296,37 @@ export default function OrdersPage() {
       pickupPostalCode: '',
       pickupLatitude: undefined,
       pickupLongitude: undefined,
+      pickupLocationConfirmed: false,
     }));
   }
 
   function selectPickupAddress(suggestion: AddressSuggestion) {
     setForm((current) => ({
       ...current,
-      pickupAddress: suggestion.label,
-      pickupFormattedAddress: suggestion.label,
+      pickupAddress: suggestion.addressLine || suggestion.label,
+      pickupFormattedAddress: suggestion.formattedAddress || suggestion.label,
+      pickupAddressNumber: suggestion.addressNumber ?? '',
       pickupLatitude: suggestion.latitude,
       pickupLongitude: suggestion.longitude,
+      pickupLocationConfirmed: false,
       pickupCity: suggestion.city ?? current.pickupCity,
       pickupNeighborhood: suggestion.neighborhood ?? current.pickupNeighborhood,
       pickupState: suggestion.state ?? current.pickupState,
       pickupPostalCode: suggestion.postalCode ?? '',
+    }));
+  }
+
+  function updatePickupLocation(update: ConfirmedLocationUpdate) {
+    setForm((current) => ({
+      ...current,
+      pickupLatitude: update.latitude,
+      pickupLongitude: update.longitude,
+      pickupLocationConfirmed: update.confirmed,
+      pickupFormattedAddress: update.formattedAddress ?? current.pickupFormattedAddress,
+      pickupCity: current.pickupCity || update.city || '',
+      pickupNeighborhood: current.pickupNeighborhood || update.neighborhood || '',
+      pickupState: current.pickupState || update.state || 'PR',
+      pickupPostalCode: current.pickupPostalCode || update.postalCode || '',
     }));
   }
 
@@ -316,16 +340,19 @@ export default function OrdersPage() {
       deliveryPostalCode: '',
       deliveryLatitude: undefined,
       deliveryLongitude: undefined,
+      deliveryLocationConfirmed: false,
     }));
   }
 
   function selectDeliveryAddress(suggestion: AddressSuggestion) {
     setForm((current) => ({
       ...current,
-      deliveryAddress: suggestion.label,
-      deliveryFormattedAddress: suggestion.label,
+      deliveryAddress: suggestion.addressLine || suggestion.label,
+      deliveryFormattedAddress: suggestion.formattedAddress || suggestion.label,
+      deliveryAddressNumber: suggestion.addressNumber ?? '',
       deliveryLatitude: suggestion.latitude,
       deliveryLongitude: suggestion.longitude,
+      deliveryLocationConfirmed: false,
       deliveryCity: suggestion.city ?? current.deliveryCity,
       deliveryNeighborhood: suggestion.neighborhood ?? current.deliveryNeighborhood,
       deliveryState: suggestion.state ?? current.deliveryState,
@@ -333,10 +360,32 @@ export default function OrdersPage() {
     }));
   }
 
+  function updateDeliveryLocation(update: ConfirmedLocationUpdate) {
+    setForm((current) => ({
+      ...current,
+      deliveryLatitude: update.latitude,
+      deliveryLongitude: update.longitude,
+      deliveryLocationConfirmed: update.confirmed,
+      deliveryFormattedAddress: update.formattedAddress ?? current.deliveryFormattedAddress,
+      deliveryCity: current.deliveryCity || update.city || '',
+      deliveryNeighborhood: current.deliveryNeighborhood || update.neighborhood || '',
+      deliveryState: current.deliveryState || update.state || 'PR',
+      deliveryPostalCode: current.deliveryPostalCode || update.postalCode || '',
+    }));
+  }
+
   async function createMission(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!form.hasPickup && !form.hasDelivery) {
       setError('Marque uma coleta, uma entrega ou as duas.');
+      return;
+    }
+    if (form.hasPickup && !form.pickupLocationConfirmed) {
+      setError('Confirme no mapa o ponto exato do GPS da coleta.');
+      return;
+    }
+    if (form.hasDelivery && !form.deliveryLocationConfirmed) {
+      setError('Confirme no mapa o ponto exato do GPS da entrega.');
       return;
     }
 
@@ -359,6 +408,7 @@ export default function OrdersPage() {
                 pickupPostalCode: form.pickupPostalCode || undefined,
                 pickupLatitude: form.pickupLatitude,
                 pickupLongitude: form.pickupLongitude,
+                pickupLocationConfirmed: form.pickupLocationConfirmed,
                 pickupCity: form.pickupCity,
                 pickupNeighborhood: form.pickupNeighborhood || undefined,
                 pickupState: form.pickupState || 'PR',
@@ -376,6 +426,7 @@ export default function OrdersPage() {
                 deliveryPostalCode: form.deliveryPostalCode || undefined,
                 deliveryLatitude: form.deliveryLatitude,
                 deliveryLongitude: form.deliveryLongitude,
+                deliveryLocationConfirmed: form.deliveryLocationConfirmed,
                 deliveryCity: form.deliveryCity,
                 deliveryNeighborhood: form.deliveryNeighborhood || undefined,
                 deliveryState: form.deliveryState || 'PR',
@@ -506,21 +557,34 @@ export default function OrdersPage() {
                 <AddressAutocomplete
                   label="Endereço da coleta"
                   required
-                  selected={form.pickupLatitude != null && form.pickupLongitude != null}
+                  selected={Boolean(form.pickupFormattedAddress)}
                   value={form.pickupAddress}
                   onValueChange={changePickupAddress}
                   onSelect={selectPickupAddress}
-                  placeholder="Rua, número ou nome do local"
+                  placeholder="Rua ou nome do local"
                 />
                 <div className="form-row mission-location-row">
-                  <label className="field"><span>Número</span><input required value={form.pickupAddressNumber} onChange={(event) => setForm((current) => ({ ...current, pickupAddressNumber: event.target.value, pickupLatitude: undefined, pickupLongitude: undefined }))} placeholder="Ex.: 350 ou s/n" /></label>
+                  <label className="field"><span>Número</span><input required value={form.pickupAddressNumber} onChange={(event) => setForm((current) => ({ ...current, pickupAddressNumber: event.target.value, pickupLocationConfirmed: false }))} placeholder="Ex.: 350 ou s/n" /></label>
                   <label className="field"><span>Complemento <small>(opcional)</small></span><input value={form.pickupAddressComplement} onChange={(event) => setForm((current) => ({ ...current, pickupAddressComplement: event.target.value }))} placeholder="Ex.: Fundos, portão azul" /></label>
                 </div>
-                <div className="form-hint compact"><Icon name="pin" />Ao salvar, o sistema localizará novamente o endereço completo com o número.</div>
+                <div className="form-hint compact"><Icon name="pin" />Depois do número, confirme no mapa a entrada exata do local.</div>
                 <div className="form-row mission-location-row">
-                  <label className="field"><span>Cidade</span><input required value={form.pickupCity} onChange={(event) => setForm((current) => ({ ...current, pickupCity: event.target.value }))} placeholder="Ex.: Marialva" /></label>
-                  <label className="field"><span>Bairro <small>(opcional)</small></span><input value={form.pickupNeighborhood} onChange={(event) => setForm((current) => ({ ...current, pickupNeighborhood: event.target.value }))} placeholder="Ex.: Centro" /></label>
+                  <label className="field"><span>Cidade</span><input required value={form.pickupCity} onChange={(event) => setForm((current) => ({ ...current, pickupCity: event.target.value, pickupLocationConfirmed: false }))} placeholder="Ex.: Marialva" /></label>
+                  <label className="field"><span>Bairro <small>(opcional)</small></span><input value={form.pickupNeighborhood} onChange={(event) => setForm((current) => ({ ...current, pickupNeighborhood: event.target.value, pickupLocationConfirmed: false }))} placeholder="Ex.: Centro" /></label>
                 </div>
+                <PreciseLocationPicker
+                  kind="pickup"
+                  address={form.pickupAddress}
+                  addressNumber={form.pickupAddressNumber}
+                  neighborhood={form.pickupNeighborhood}
+                  city={form.pickupCity}
+                  state={form.pickupState}
+                  postalCode={form.pickupPostalCode}
+                  latitude={form.pickupLatitude}
+                  longitude={form.pickupLongitude}
+                  confirmed={form.pickupLocationConfirmed}
+                  onChange={updatePickupLocation}
+                />
                 <label className="field"><span>O que coletar</span><input required value={form.pickupItem} onChange={(event) => setForm((current) => ({ ...current, pickupItem: event.target.value }))} placeholder="Ex.: 30 jalecos prontos" /></label>
                 <label className="field mission-time-field"><span>Horário desejado <small>(opcional)</small></span><input type="time" value={form.pickupTime} onChange={(event) => setForm((current) => ({ ...current, pickupTime: event.target.value }))} /></label>
               </div>
@@ -539,21 +603,34 @@ export default function OrdersPage() {
                 <AddressAutocomplete
                   label="Endereço da entrega"
                   required
-                  selected={form.deliveryLatitude != null && form.deliveryLongitude != null}
+                  selected={Boolean(form.deliveryFormattedAddress)}
                   value={form.deliveryAddress}
                   onValueChange={changeDeliveryAddress}
                   onSelect={selectDeliveryAddress}
-                  placeholder="Rua, número ou nome do local"
+                  placeholder="Rua ou nome do local"
                 />
                 <div className="form-row mission-location-row">
-                  <label className="field"><span>Número</span><input required value={form.deliveryAddressNumber} onChange={(event) => setForm((current) => ({ ...current, deliveryAddressNumber: event.target.value, deliveryLatitude: undefined, deliveryLongitude: undefined }))} placeholder="Ex.: 120 ou s/n" /></label>
+                  <label className="field"><span>Número</span><input required value={form.deliveryAddressNumber} onChange={(event) => setForm((current) => ({ ...current, deliveryAddressNumber: event.target.value, deliveryLocationConfirmed: false }))} placeholder="Ex.: 120 ou s/n" /></label>
                   <label className="field"><span>Complemento <small>(opcional)</small></span><input value={form.deliveryAddressComplement} onChange={(event) => setForm((current) => ({ ...current, deliveryAddressComplement: event.target.value }))} placeholder="Ex.: Barracão dos fundos" /></label>
                 </div>
-                <div className="form-hint compact"><Icon name="pin" />Ao salvar, o sistema localizará novamente o endereço completo com o número.</div>
+                <div className="form-hint compact"><Icon name="pin" />Depois do número, confirme no mapa a entrada exata do local.</div>
                 <div className="form-row mission-location-row">
-                  <label className="field"><span>Cidade</span><input required value={form.deliveryCity} onChange={(event) => setForm((current) => ({ ...current, deliveryCity: event.target.value }))} placeholder="Ex.: Maringá" /></label>
-                  <label className="field"><span>Bairro <small>(opcional)</small></span><input value={form.deliveryNeighborhood} onChange={(event) => setForm((current) => ({ ...current, deliveryNeighborhood: event.target.value }))} placeholder="Ex.: Centro" /></label>
+                  <label className="field"><span>Cidade</span><input required value={form.deliveryCity} onChange={(event) => setForm((current) => ({ ...current, deliveryCity: event.target.value, deliveryLocationConfirmed: false }))} placeholder="Ex.: Maringá" /></label>
+                  <label className="field"><span>Bairro <small>(opcional)</small></span><input value={form.deliveryNeighborhood} onChange={(event) => setForm((current) => ({ ...current, deliveryNeighborhood: event.target.value, deliveryLocationConfirmed: false }))} placeholder="Ex.: Centro" /></label>
                 </div>
+                <PreciseLocationPicker
+                  kind="delivery"
+                  address={form.deliveryAddress}
+                  addressNumber={form.deliveryAddressNumber}
+                  neighborhood={form.deliveryNeighborhood}
+                  city={form.deliveryCity}
+                  state={form.deliveryState}
+                  postalCode={form.deliveryPostalCode}
+                  latitude={form.deliveryLatitude}
+                  longitude={form.deliveryLongitude}
+                  confirmed={form.deliveryLocationConfirmed}
+                  onChange={updateDeliveryLocation}
+                />
                 <label className="field"><span>O que entregar</span><input required value={form.deliveryItem} onChange={(event) => setForm((current) => ({ ...current, deliveryItem: event.target.value }))} placeholder="Ex.: 30 jalecos para bordar" /></label>
                 <label className="field mission-time-field"><span>Horário desejado <small>(opcional)</small></span><input type="time" value={form.deliveryTime} onChange={(event) => setForm((current) => ({ ...current, deliveryTime: event.target.value }))} /></label>
               </div>

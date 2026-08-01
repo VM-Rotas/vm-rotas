@@ -50,6 +50,7 @@ export interface AddressSuggestion {
   id: string;
   label: string;
   addressLine: string;
+  addressNumber?: string | null;
   formattedAddress?: string | null;
   city?: string | null;
   neighborhood?: string | null;
@@ -58,6 +59,23 @@ export interface AddressSuggestion {
   latitude: number;
   longitude: number;
   source?: string | null;
+}
+
+export type LocationAccuracy = 'BUILDING' | 'STREET' | 'AREA' | 'UNKNOWN';
+
+export interface GeocodedAddress {
+  latitude: number;
+  longitude: number;
+  formattedAddress: string;
+  placeId: string;
+  city?: string | null;
+  neighborhood?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  accuracy?: LocationAccuracy;
+  confidence?: number | null;
+  buildingConfidence?: number | null;
+  matchType?: string | null;
 }
 
 export interface Vehicle {

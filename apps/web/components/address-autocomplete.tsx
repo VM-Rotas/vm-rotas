@@ -109,7 +109,7 @@ export function AddressAutocomplete({
   }
 
   function chooseSuggestion(suggestion: AddressSuggestion) {
-    lastSelectedValueRef.current = suggestion.label;
+    lastSelectedValueRef.current = suggestion.addressLine || suggestion.label;
     onSelect(suggestion);
     setSuggestions([]);
     setActiveIndex(-1);
@@ -196,9 +196,9 @@ export function AddressAutocomplete({
       {selected ? (
         <span className="address-selected-text"><Icon name="check" />Endereço localizado</span>
       ) : showNoResults ? (
-        <span className="field-help">Não encontramos ainda. Digite também o número e a cidade.</span>
+        <span className="field-help">Não encontramos ainda. Digite a rua e a cidade; o número fica no campo abaixo.</span>
       ) : (
-        <span className="field-help">Comece pela rua. Para maior precisão, inclua número e cidade.</span>
+        <span className="field-help">Comece pela rua e selecione uma sugestão. Depois informe o número e confirme no mapa.</span>
       )}
 
       {showPanel ? (
@@ -218,7 +218,11 @@ export function AddressAutocomplete({
               >
                 <span className="address-suggestion-pin"><Icon name="pin" /></span>
                 <span className="address-suggestion-copy">
-                  <strong>{suggestion.addressLine || suggestion.label}</strong>
+                  <strong>
+                    {[suggestion.addressLine || suggestion.label, suggestion.addressNumber]
+                      .filter(Boolean)
+                      .join(', ')}
+                  </strong>
                   {[suggestion.neighborhood, suggestion.city, suggestion.state]
                     .filter(Boolean)
                     .join(' • ') ? (

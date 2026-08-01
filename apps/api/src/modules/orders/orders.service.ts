@@ -24,6 +24,7 @@ interface MissionPointInput {
   formattedAddress?: string;
   latitude?: number;
   longitude?: number;
+  locationConfirmed?: boolean;
   city?: string;
   neighborhood?: string;
   state?: string;
@@ -100,6 +101,7 @@ export class OrdersService {
       postalCode: dto.pickupPostalCode,
       latitude: dto.pickupLatitude,
       longitude: dto.pickupLongitude,
+      locationConfirmed: dto.pickupLocationConfirmed,
       city: dto.pickupCity,
       neighborhood: dto.pickupNeighborhood,
       state: dto.pickupState,
@@ -115,6 +117,7 @@ export class OrdersService {
       postalCode: dto.deliveryPostalCode,
       latitude: dto.deliveryLatitude,
       longitude: dto.deliveryLongitude,
+      locationConfirmed: dto.deliveryLocationConfirmed,
       city: dto.deliveryCity,
       neighborhood: dto.deliveryNeighborhood,
       state: dto.deliveryState,
@@ -134,23 +137,36 @@ export class OrdersService {
     const geocodedPoints = await Promise.all(
       points.map(async (point) => ({
         point,
-        // O ponto selecionado no autocomplete normalmente representa a rua.
-        // Depois que o usuário informa o número, geocodificamos novamente o
-        // endereço completo para obter a melhor coordenada disponível.
-        geocoded: point.addressNumber
-          ? await this.tryGeocode(this.missionSearchAddress(point))
-          : point.latitude != null && point.longitude != null
+        // Quando o usuário confirma o pino no minimapa, essas coordenadas
+        // representam a entrada exata escolhida. Nesse caso, não substituímos o
+        // ponto por uma nova geocodificação aproximada da rua.
+        geocoded:
+          point.locationConfirmed && point.latitude != null && point.longitude != null
             ? {
                 latitude: point.latitude,
                 longitude: point.longitude,
-                formattedAddress: point.formattedAddress ?? point.address,
-                placeId: 'selected-address',
+                formattedAddress: this.missionSearchAddress(point),
+                placeId: 'confirmed-map-pin',
                 city: point.city,
                 neighborhood: point.neighborhood,
                 state: point.state,
                 postalCode: point.postalCode,
+                accuracy: 'BUILDING' as const,
               }
-            : await this.tryGeocode(this.missionSearchAddress(point)),
+            : point.addressNumber
+              ? await this.tryGeocode(this.missionSearchAddress(point))
+              : point.latitude != null && point.longitude != null
+                ? {
+                    latitude: point.latitude,
+                    longitude: point.longitude,
+                    formattedAddress: point.formattedAddress ?? point.address,
+                    placeId: 'selected-address',
+                    city: point.city,
+                    neighborhood: point.neighborhood,
+                    state: point.state,
+                    postalCode: point.postalCode,
+                  }
+                : await this.tryGeocode(this.missionSearchAddress(point)),
       })),
     );
 
@@ -528,6 +544,7 @@ export class OrdersService {
       postalCode?: string;
       latitude?: number;
       longitude?: number;
+      locationConfirmed?: boolean;
       city?: string;
       neighborhood?: string;
       state?: string;
@@ -560,6 +577,17 @@ export class OrdersService {
       );
     }
 
+    if (
+      values.locationConfirmed !== true ||
+      values.latitude == null ||
+      values.longitude == null
+    ) {
+      const label = type === 'PICKUP' ? 'coleta' : 'entrega';
+      throw new BadRequestException(
+        `Confirme no mapa o ponto exato do GPS da ${label}.`,
+      );
+    }
+
     return {
       type,
       name: values.name.trim(),
@@ -570,6 +598,7 @@ export class OrdersService {
       formattedAddress: values.formattedAddress?.trim() || undefined,
       latitude: values.latitude,
       longitude: values.longitude,
+      locationConfirmed: values.locationConfirmed === true,
       city: values.city.trim(),
       neighborhood: values.neighborhood?.trim() || undefined,
       state: values.state?.trim().toUpperCase() || 'PR',
