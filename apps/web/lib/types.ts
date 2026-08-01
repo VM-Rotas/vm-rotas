@@ -44,6 +44,8 @@ export interface ServiceOrder {
   latitude?: string | number | null;
   longitude?: string | number | null;
   notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AddressSuggestion {

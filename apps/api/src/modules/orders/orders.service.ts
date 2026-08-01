@@ -508,6 +508,91 @@ export class OrdersService {
     });
   }
 
+  async complete(user: AuthUser, id: string): Promise<ServiceOrder> {
+    const existing = await this.prisma.serviceOrder.findFirst({
+      where: { id, organizationId: user.organizationId },
+      include: {
+        routeStops: {
+          where: { status: { notIn: ['COMPLETED', 'FAILED', 'SKIPPED'] } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Missão não encontrada.');
+    }
+    if (existing.status === 'CANCELLED') {
+      throw new BadRequestException('Uma missão cancelada não pode ser concluída.');
+    }
+    if (existing.status === 'COMPLETED') {
+      return existing;
+    }
+
+    if (
+      existing.type === 'DELIVERY' &&
+      existing.externalReference?.startsWith('MIS-')
+    ) {
+      const pickup = await this.prisma.serviceOrder.findFirst({
+        where: {
+          organizationId: user.organizationId,
+          externalReference: existing.externalReference,
+          type: 'PICKUP',
+        },
+        select: { status: true },
+      });
+
+      if (pickup && pickup.status !== 'COMPLETED') {
+        throw new BadRequestException(
+          'Conclua a coleta antes de marcar a entrega como realizada.',
+        );
+      }
+    }
+
+    const now = new Date();
+    const activeStop = existing.routeStops[0];
+
+    return this.prisma.$transaction(async (transaction) => {
+      if (activeStop) {
+        await transaction.routeStop.update({
+          where: { id: activeStop.id },
+          data: {
+            status: 'COMPLETED',
+            actualArrivalAt: activeStop.actualArrivalAt ?? now,
+            actualDepartureAt: now,
+          },
+        });
+      }
+
+      const completed = await transaction.serviceOrder.update({
+        where: { id: existing.id },
+        data: { status: 'COMPLETED' },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          userId: user.sub,
+          action:
+            existing.type === 'PICKUP'
+              ? 'MISSION_PICKUP_COMPLETED'
+              : 'MISSION_DELIVERY_COMPLETED',
+          entityType: 'ServiceOrder',
+          entityId: existing.id,
+          metadata: {
+            code: existing.code,
+            reference: existing.externalReference,
+            type: existing.type,
+            routeStopId: activeStop?.id,
+          },
+        },
+      });
+
+      return completed;
+    });
+  }
+
   async cancel(user: AuthUser, id: string): Promise<ServiceOrder> {
     const existing = await this.findOne(user, id);
     if (['IN_PROGRESS', 'COMPLETED'].includes(existing.status)) {

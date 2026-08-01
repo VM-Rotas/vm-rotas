@@ -773,11 +773,125 @@ h1, h2, h3, p { margin-top: 0; }
 .mission-navigation-actions .button { flex: 1 1 auto; min-width: 105px; }
 .mission-card-footer { display: flex; justify-content: flex-end; padding: .65rem 1rem; border-top: 1px solid var(--line); background: #fbfcfc; }
 
+.mission-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 .95rem;
+  padding: .55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.mission-tabs { display: flex; flex-wrap: wrap; gap: .38rem; }
+.mission-tab {
+  min-height: 39px;
+  display: inline-flex;
+  align-items: center;
+  gap: .48rem;
+  padding: .45rem .72rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: .76rem;
+  font-weight: 760;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.mission-tab:hover { color: var(--primary); background: var(--primary-light); }
+.mission-tab > span {
+  min-width: 23px;
+  height: 23px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 .34rem;
+  border-radius: 999px;
+  color: var(--muted);
+  background: #edf1f0;
+  font-size: .66rem;
+}
+.mission-tab.is-active { color: #fff; border-color: var(--primary); background: var(--primary); }
+.mission-tab.is-active > span { color: var(--primary); background: #fff; }
+.mission-tab-muted:not(.is-active) { color: var(--muted-2); }
+.mission-priority-note {
+  max-width: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .42rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: .7rem;
+  line-height: 1.35;
+  text-align: right;
+}
+.mission-priority-note svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--danger); }
+.mission-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: .25rem 0 .72rem;
+  padding: 0 .12rem;
+}
+.mission-section-heading h2 { margin: .12rem 0 0; font-size: 1.08rem; }
+.mission-section-heading > strong {
+  min-width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--primary);
+  background: var(--primary-light);
+  font-size: .8rem;
+}
+.mission-card.is-completed { border-left-color: var(--success); }
+.mission-card.is-completed .mission-card-header { background: linear-gradient(180deg, #fbfffc, #f5faf7); }
+.mission-stop.is-completed { border-color: #a9d5bd; background: #f3fbf6; }
+.mission-stop.is-completed .mission-stop-kicker { color: var(--success); }
+.mission-stop.is-completed .mission-stop-kicker > span { color: #fff; background: var(--success); }
+.mission-stop-done-label {
+  margin-left: auto;
+  padding: .2rem .42rem;
+  border-radius: 999px;
+  color: #23704b;
+  background: #dff3e7;
+  font-size: .59rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.mission-stop-completed {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  margin-top: .7rem;
+  border: 1px solid #a9d5bd;
+  border-radius: 10px;
+  color: #23704b;
+  background: #e9f7ef;
+  font-size: .72rem;
+  font-weight: 780;
+}
+.mission-stop-completed svg { width: 15px; height: 15px; }
+.mission-complete-button { width: 100%; margin-top: .7rem; justify-content: center; }
+.mission-complete-button:disabled { cursor: not-allowed; opacity: .62; }
+
 @media (max-width: 1120px) {
   .mission-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
+  .mission-list-toolbar { align-items: stretch; flex-direction: column; }
+  .mission-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mission-tab { justify-content: center; }
+  .mission-tab-muted { grid-column: 1 / -1; }
+  .mission-priority-note { max-width: none; justify-content: flex-start; text-align: left; }
   .priority-selector { grid-template-columns: 1fr; }
   .priority-option { min-height: 58px; }
   .mission-location-row { grid-template-columns: 1fr; }

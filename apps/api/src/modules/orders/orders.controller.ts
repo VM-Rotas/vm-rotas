@@ -50,6 +50,13 @@ export class OrdersController {
     return this.orders.create(user, dto);
   }
 
+  @Patch(':id/complete')
+  @Roles('OWNER', 'ADMIN', 'DISPATCHER', 'DRIVER')
+  @ApiOperation({ summary: 'Marca uma coleta ou entrega como concluída' })
+  complete(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.orders.complete(user, id);
+  }
+
   @Patch(':id')
   @Roles('OWNER', 'ADMIN', 'DISPATCHER')
   @ApiOperation({ summary: 'Atualiza uma ordem' })

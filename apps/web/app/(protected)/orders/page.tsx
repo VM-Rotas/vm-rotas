@@ -60,6 +60,8 @@ interface MissionView {
   bundled: boolean;
 }
 
+type MissionTab = 'AVAILABLE' | 'COMPLETED' | 'CANCELLED';
+
 const initialForm: MissionForm = {
   priority: 'NORMAL',
   hasPickup: true,
@@ -95,15 +97,12 @@ const initialForm: MissionForm = {
   notes: '',
 };
 
-const STATUS_ORDER: OrderStatus[] = [
-  'IN_PROGRESS',
-  'ROUTED',
-  'READY',
-  'PLANNED',
-  'FAILED',
-  'COMPLETED',
-  'CANCELLED',
-];
+const PRIORITY_RANK: Record<OrderPriority, number> = {
+  URGENT: 4,
+  HIGH: 3,
+  NORMAL: 2,
+  LOW: 1,
+};
 
 const PRIORITY_OPTIONS: Array<{ value: OrderPriority; label: string; helper: string }> = [
   { value: 'NORMAL', label: 'Normal', helper: 'Pode entrar na melhor sequência' },
@@ -114,7 +113,12 @@ const PRIORITY_OPTIONS: Array<{ value: OrderPriority; label: string; helper: str
 function missionStatus(orders: ServiceOrder[]): OrderStatus {
   if (orders.every((order) => order.status === 'CANCELLED')) return 'CANCELLED';
   if (orders.every((order) => order.status === 'COMPLETED')) return 'COMPLETED';
-  return STATUS_ORDER.find((status) => orders.some((order) => order.status === status)) ?? 'READY';
+  if (orders.some((order) => order.status === 'FAILED')) return 'FAILED';
+  if (orders.some((order) => order.status === 'COMPLETED')) return 'IN_PROGRESS';
+  if (orders.some((order) => order.status === 'IN_PROGRESS')) return 'IN_PROGRESS';
+  if (orders.some((order) => order.status === 'ROUTED')) return 'ROUTED';
+  if (orders.some((order) => order.status === 'READY')) return 'READY';
+  return 'PLANNED';
 }
 
 function groupMissions(orders: ServiceOrder[]): MissionView[] {
@@ -135,6 +139,47 @@ function groupMissions(orders: ServiceOrder[]): MissionView[] {
     status: missionStatus(groupedOrders),
     bundled: reference.startsWith('MIS-'),
   }));
+}
+
+function missionTimeValue(mission: MissionView): number {
+  const pendingTimes = mission.orders
+    .filter((order) => order.status !== 'COMPLETED' && order.timeWindowStart)
+    .map((order) => new Date(order.timeWindowStart!).getTime())
+    .filter(Number.isFinite);
+  return pendingTimes.length > 0 ? Math.min(...pendingTimes) : Number.MAX_SAFE_INTEGER;
+}
+
+function missionCreatedValue(mission: MissionView): number {
+  const values = mission.orders
+    .map((order) => new Date(order.createdAt).getTime())
+    .filter(Number.isFinite);
+  return values.length > 0 ? Math.min(...values) : 0;
+}
+
+function missionUpdatedValue(mission: MissionView): number {
+  const values = mission.orders
+    .map((order) => new Date(order.updatedAt).getTime())
+    .filter(Number.isFinite);
+  return values.length > 0 ? Math.max(...values) : 0;
+}
+
+function sortAvailableMissions(left: MissionView, right: MissionView): number {
+  const priorityDifference = PRIORITY_RANK[right.priority] - PRIORITY_RANK[left.priority];
+  if (priorityDifference !== 0) return priorityDifference;
+
+  const timeDifference = missionTimeValue(left) - missionTimeValue(right);
+  if (timeDifference !== 0) return timeDifference;
+
+  return missionCreatedValue(left) - missionCreatedValue(right);
+}
+
+function completionTimeLabel(mission: MissionView): string {
+  const timestamp = missionUpdatedValue(mission);
+  if (!timestamp) return '';
+  return new Intl.DateTimeFormat('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
 }
 
 function missionItem(order?: ServiceOrder): string {
@@ -194,16 +239,34 @@ function wazeUrl(order: ServiceOrder): string {
   return `https://www.waze.com/ul?q=${encodeURIComponent(navigationDestination(order))}&navigate=yes`;
 }
 
-function MissionStop({ order, type }: { order: ServiceOrder; type: 'pickup' | 'delivery' }) {
+function MissionStop({
+  order,
+  type,
+  canComplete,
+  completionBlocked = false,
+  completing = false,
+  onComplete,
+}: {
+  order: ServiceOrder;
+  type: 'pickup' | 'delivery';
+  canComplete: boolean;
+  completionBlocked?: boolean;
+  completing?: boolean;
+  onComplete: (order: ServiceOrder) => void;
+}) {
   const locationLine = [order.neighborhood, `${order.city} - ${order.state}`]
     .filter(Boolean)
     .join(' • ');
+  const completed = order.status === 'COMPLETED';
+  const completedLabel = type === 'pickup' ? 'Coletado' : 'Entregue';
+  const actionLabel = type === 'pickup' ? 'Marcar como coletado' : 'Marcar como entregue';
 
   return (
-    <section className={`mission-stop mission-stop-${type}`}>
+    <section className={`mission-stop mission-stop-${type}${completed ? ' is-completed' : ''}`}>
       <div className="mission-stop-kicker">
-        <span><Icon name={type === 'pickup' ? 'pin' : 'routes'} /></span>
+        <span><Icon name={completed ? 'check' : type === 'pickup' ? 'pin' : 'routes'} /></span>
         {type === 'pickup' ? 'Coleta' : 'Entrega'}
+        {completed ? <strong className="mission-stop-done-label">{completedLabel}</strong> : null}
       </div>
       <h3>{order.recipientName}</h3>
       <p className="mission-stop-item">{missionItem(order)}</p>
@@ -225,6 +288,19 @@ function MissionStop({ order, type }: { order: ServiceOrder; type: 'pickup' | 'd
           <Icon name="arrow" />Waze
         </a>
       </div>
+      {completed ? (
+        <div className="mission-stop-completed"><Icon name="check" />{completedLabel}</div>
+      ) : canComplete ? (
+        <button
+          className="button button-primary button-small mission-complete-button"
+          type="button"
+          disabled={completionBlocked || completing}
+          onClick={() => onComplete(order)}
+          title={completionBlocked ? 'Conclua a coleta antes da entrega.' : undefined}
+        >
+          {completing ? <><span className="spinner small" />Salvando...</> : completionBlocked ? 'Aguardando coleta' : <><Icon name="check" />{actionLabel}</>}
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -233,7 +309,7 @@ export default function OrdersPage() {
   const { user } = useAuth();
   const [date, setDate] = useState(todayDateInput());
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
+  const [activeTab, setActiveTab] = useState<MissionTab>('AVAILABLE');
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -241,7 +317,9 @@ export default function OrdersPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<MissionForm>({ ...initialForm });
   const [saving, setSaving] = useState(false);
+  const [completingId, setCompletingId] = useState<string | null>(null);
   const canManage = Boolean(user && ['OWNER', 'ADMIN', 'DISPATCHER'].includes(user.role));
+  const canComplete = Boolean(user && ['OWNER', 'ADMIN', 'DISPATCHER', 'DRIVER'].includes(user.role));
 
   useEffect(() => {
     const dateFromUrl = new URLSearchParams(window.location.search).get('date');
@@ -253,7 +331,7 @@ export default function OrdersPage() {
     setError('');
     try {
       const result = await api<{ items: ServiceOrder[]; total: number }>(
-        `/orders${queryString({ date, search, status, take: 200 })}`,
+        `/orders${queryString({ date, search, take: 200 })}`,
       );
       setOrders(result.items);
     } catch (caught) {
@@ -261,7 +339,7 @@ export default function OrdersPage() {
     } finally {
       setLoading(false);
     }
-  }, [date, search, status]);
+  }, [date, search]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 180);
@@ -269,10 +347,31 @@ export default function OrdersPage() {
   }, [load]);
 
   const missions = useMemo(() => groupMissions(orders), [orders]);
-  const urgentCount = useMemo(
-    () => missions.filter((mission) => mission.priority === 'URGENT' && !['COMPLETED', 'CANCELLED'].includes(mission.status)).length,
+  const availableMissions = useMemo(
+    () => missions
+      .filter((mission) => !['COMPLETED', 'CANCELLED'].includes(mission.status))
+      .sort(sortAvailableMissions),
     [missions],
   );
+  const completedMissions = useMemo(
+    () => missions
+      .filter((mission) => mission.status === 'COMPLETED')
+      .sort((left, right) => missionUpdatedValue(right) - missionUpdatedValue(left)),
+    [missions],
+  );
+  const cancelledMissions = useMemo(
+    () => missions
+      .filter((mission) => mission.status === 'CANCELLED')
+      .sort((left, right) => missionUpdatedValue(right) - missionUpdatedValue(left)),
+    [missions],
+  );
+  const visibleMissions =
+    activeTab === 'AVAILABLE'
+      ? availableMissions
+      : activeTab === 'COMPLETED'
+        ? completedMissions
+        : cancelledMissions;
+  const urgentCount = availableMissions.filter((mission) => mission.priority === 'URGENT').length;
 
   function openForm() {
     setError('');
@@ -439,12 +538,32 @@ export default function OrdersPage() {
       });
       setForm({ ...initialForm });
       setFormOpen(false);
+      setActiveTab('AVAILABLE');
       setSuccess('Missão cadastrada e pronta para entrar na rota.');
       await load();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível cadastrar a missão.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function completeOrder(order: ServiceOrder) {
+    const action = order.type === 'PICKUP' ? 'coleta' : 'entrega';
+    const result = order.type === 'PICKUP' ? 'coletado' : 'entregue';
+    if (!window.confirm(`Confirmar que a ${action} foi realizada?`)) return;
+
+    setCompletingId(order.id);
+    setError('');
+    setSuccess('');
+    try {
+      await api(`/orders/${order.id}/complete`, { method: 'PATCH' });
+      setSuccess(`Item marcado como ${result}.`);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : `Não foi possível concluir a ${action}.`);
+    } finally {
+      setCompletingId(null);
     }
   }
 
@@ -474,48 +593,116 @@ export default function OrdersPage() {
       {error ? <ErrorBanner message={error} /> : null}
       {success ? <SuccessBanner message={success} /> : null}
 
-      <section className="panel filter-panel">
+      <section className="panel filter-panel mission-filter-panel">
         <div className="filter-grid">
           <label className="field compact"><span>Data</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
           <label className="field compact field-grow"><span>Buscar</span><input type="search" placeholder="Nome, cidade, endereço ou item" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-          <label className="field compact"><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Todos</option><option value="PLANNED">Planejada</option><option value="READY">Pronta</option><option value="ROUTED">Na rota</option><option value="IN_PROGRESS">Em andamento</option><option value="COMPLETED">Concluída</option><option value="FAILED">Com problema</option><option value="CANCELLED">Cancelada</option></select></label>
         </div>
-        <div className="filter-summary"><strong>{missions.length}</strong> missão(ões) {urgentCount > 0 ? <span className="urgent-inline"><Icon name="warning" />{urgentCount} urgente(s)</span> : null}</div>
+        <div className="filter-summary"><strong>{missions.length}</strong> missão(ões) no dia {urgentCount > 0 ? <span className="urgent-inline"><Icon name="warning" />{urgentCount} urgente(s)</span> : null}</div>
       </section>
+
+      <section className="mission-list-toolbar" aria-label="Organização das missões">
+        <div className="mission-tabs" role="tablist" aria-label="Situação das missões">
+          <button
+            className={`mission-tab${activeTab === 'AVAILABLE' ? ' is-active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'AVAILABLE'}
+            onClick={() => setActiveTab('AVAILABLE')}
+          >
+            Disponíveis <span>{availableMissions.length}</span>
+          </button>
+          <button
+            className={`mission-tab${activeTab === 'COMPLETED' ? ' is-active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'COMPLETED'}
+            onClick={() => setActiveTab('COMPLETED')}
+          >
+            Finalizadas <span>{completedMissions.length}</span>
+          </button>
+          <button
+            className={`mission-tab mission-tab-muted${activeTab === 'CANCELLED' ? ' is-active' : ''}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'CANCELLED'}
+            onClick={() => setActiveTab('CANCELLED')}
+          >
+            Canceladas <span>{cancelledMissions.length}</span>
+          </button>
+        </div>
+        {activeTab === 'AVAILABLE' ? (
+          <p className="mission-priority-note"><Icon name="warning" />Ordem: Urgente → Alta → Normal → Baixa. No mesmo nível, o horário mais cedo aparece primeiro.</p>
+        ) : null}
+      </section>
+
+      <div className="mission-section-heading">
+        <div>
+          <span className="eyebrow">{activeTab === 'AVAILABLE' ? 'Para executar' : activeTab === 'COMPLETED' ? 'Histórico do dia' : 'Fora da operação'}</span>
+          <h2>{activeTab === 'AVAILABLE' ? 'Missões disponíveis' : activeTab === 'COMPLETED' ? 'Missões finalizadas' : 'Missões canceladas'}</h2>
+        </div>
+        <strong>{visibleMissions.length}</strong>
+      </div>
 
       {loading && missions.length === 0 ? (
         <section className="panel"><LoadingBlock /></section>
-      ) : missions.length === 0 ? (
-        <section className="panel"><EmptyState title="Nenhuma missão nesta data" description="Cadastre o primeiro local que precisa ser visitado." /></section>
+      ) : visibleMissions.length === 0 ? (
+        <section className="panel"><EmptyState
+          title={activeTab === 'AVAILABLE' ? 'Nenhuma missão disponível' : activeTab === 'COMPLETED' ? 'Nenhuma missão finalizada' : 'Nenhuma missão cancelada'}
+          description={activeTab === 'AVAILABLE' ? 'Cadastre uma missão ou escolha outra data.' : activeTab === 'COMPLETED' ? 'As coletas e entregas concluídas aparecerão aqui automaticamente.' : 'As missões canceladas aparecerão aqui.'}
+        /></section>
       ) : (
         <section className="mission-grid">
-          {missions.map((mission) => (
-            <article className={`mission-card priority-${mission.priority.toLowerCase()}`} key={mission.reference}>
-              <header className="mission-card-header">
-                <div className="mission-card-title">
-                  <span>{missionTypeLabel(mission)}</span>
-                  <h2>{missionTitle(mission)}</h2>
-                  <small>{mission.reference}</small>
-                </div>
-                <div className="mission-card-badges">
-                  <StatusBadge value={mission.priority} compact />
-                  <StatusBadge value={mission.status} compact />
-                </div>
-              </header>
+          {visibleMissions.map((mission) => {
+            const pickupCompleted = mission.pickup?.status === 'COMPLETED';
+            const deliveryBlocked = Boolean(mission.pickup && mission.delivery && !pickupCompleted);
+            const completedAt = mission.status === 'COMPLETED' ? completionTimeLabel(mission) : '';
 
-              <div className={`mission-card-flow${mission.pickup && mission.delivery ? ' has-two-stops' : ''}`}>
-                {mission.pickup ? <MissionStop order={mission.pickup} type="pickup" /> : null}
-                {mission.pickup && mission.delivery ? <span className="mission-flow-arrow"><Icon name="arrow" /></span> : null}
-                {mission.delivery ? <MissionStop order={mission.delivery} type="delivery" /> : null}
-              </div>
+            return (
+              <article className={`mission-card priority-${mission.priority.toLowerCase()}${mission.status === 'COMPLETED' ? ' is-completed' : ''}`} key={mission.reference}>
+                <header className="mission-card-header">
+                  <div className="mission-card-title">
+                    <span>{missionTypeLabel(mission)}</span>
+                    <h2>{missionTitle(mission)}</h2>
+                    <small>{mission.reference}{completedAt ? ` • Finalizada às ${completedAt}` : ''}</small>
+                  </div>
+                  <div className="mission-card-badges">
+                    <StatusBadge value={mission.priority} compact />
+                    <StatusBadge value={mission.status} compact />
+                  </div>
+                </header>
 
-              {canManage && !['IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(mission.status) ? (
-                <footer className="mission-card-footer">
-                  <button className="button button-ghost button-small danger-text" onClick={() => void cancelMission(mission)}>Cancelar missão</button>
-                </footer>
-              ) : null}
-            </article>
-          ))}
+                <div className={`mission-card-flow${mission.pickup && mission.delivery ? ' has-two-stops' : ''}`}>
+                  {mission.pickup ? (
+                    <MissionStop
+                      order={mission.pickup}
+                      type="pickup"
+                      canComplete={canComplete && activeTab === 'AVAILABLE'}
+                      completing={completingId === mission.pickup.id}
+                      onComplete={(order) => void completeOrder(order)}
+                    />
+                  ) : null}
+                  {mission.pickup && mission.delivery ? <span className="mission-flow-arrow"><Icon name="arrow" /></span> : null}
+                  {mission.delivery ? (
+                    <MissionStop
+                      order={mission.delivery}
+                      type="delivery"
+                      canComplete={canComplete && activeTab === 'AVAILABLE'}
+                      completionBlocked={deliveryBlocked}
+                      completing={completingId === mission.delivery.id}
+                      onComplete={(order) => void completeOrder(order)}
+                    />
+                  ) : null}
+                </div>
+
+                {canManage && activeTab === 'AVAILABLE' && !['IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(mission.status) ? (
+                  <footer className="mission-card-footer">
+                    <button className="button button-ghost button-small danger-text" onClick={() => void cancelMission(mission)}>Cancelar missão</button>
+                  </footer>
+                ) : null}
+              </article>
+            );
+          })}
         </section>
       )}
 

@@ -113,3 +113,81 @@ describe('OrdersService.createMission', () => {
     );
   });
 });
+
+describe('OrdersService.complete', () => {
+  it('marca a coleta e a parada ativa como concluídas', async () => {
+    const routeStopUpdates: Array<Record<string, unknown>> = [];
+    const orderUpdates: Array<Record<string, unknown>> = [];
+    const existing = {
+      id: 'order-1',
+      organizationId: 'org-1',
+      code: 'MIS-TEST-C',
+      externalReference: 'MIS-TEST',
+      type: 'PICKUP',
+      status: 'READY',
+      routeStops: [
+        {
+          id: 'stop-1',
+          actualArrivalAt: null,
+        },
+      ],
+    };
+    const transaction = {
+      routeStop: {
+        update: async ({ data }: { data: Record<string, unknown> }) => {
+          routeStopUpdates.push(data);
+          return { id: 'stop-1', ...data };
+        },
+      },
+      serviceOrder: {
+        update: async ({ data }: { data: Record<string, unknown> }) => {
+          orderUpdates.push(data);
+          return { ...existing, ...data };
+        },
+      },
+      auditLog: { create: async () => ({ id: 'audit-1' }) },
+    };
+    const prisma = {
+      serviceOrder: { findFirst: async () => existing },
+      $transaction: async <T>(callback: (client: typeof transaction) => Promise<T>) =>
+        callback(transaction),
+    } as unknown as PrismaService;
+    const maps = {} as MapsService;
+    const service = new OrdersService(prisma, maps);
+
+    const result = await service.complete(user, 'order-1');
+
+    assert.equal(result.status, 'COMPLETED');
+    assert.equal(orderUpdates[0]?.status, 'COMPLETED');
+    assert.equal(routeStopUpdates[0]?.status, 'COMPLETED');
+    assert.ok(routeStopUpdates[0]?.actualDepartureAt instanceof Date);
+  });
+
+  it('não permite concluir a entrega antes da coleta da mesma missão', async () => {
+    const existing = {
+      id: 'order-2',
+      organizationId: 'org-1',
+      code: 'MIS-TEST-E',
+      externalReference: 'MIS-TEST',
+      type: 'DELIVERY',
+      status: 'READY',
+      routeStops: [],
+    };
+    let calls = 0;
+    const prisma = {
+      serviceOrder: {
+        findFirst: async () => {
+          calls += 1;
+          return calls === 1 ? existing : { status: 'READY' };
+        },
+      },
+    } as unknown as PrismaService;
+    const maps = {} as MapsService;
+    const service = new OrdersService(prisma, maps);
+
+    await assert.rejects(
+      () => service.complete(user, 'order-2'),
+      /Conclua a coleta antes de marcar a entrega/,
+    );
+  });
+});
