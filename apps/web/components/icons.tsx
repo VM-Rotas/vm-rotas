@@ -5,6 +5,7 @@ export type IconName =
   | 'orders'
   | 'vehicles'
   | 'routes'
+  | 'tracking'
   | 'team'
   | 'logout'
   | 'menu'
@@ -23,6 +24,7 @@ const paths: Record<IconName, React.ReactNode> = {
   orders: <><path d="M9 5h6"/><path d="M9 9h6"/><path d="M9 13h4"/><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="m15 17 2 2 4-4"/></>,
   vehicles: <><path d="M3 17h18"/><path d="M5 17V9l2-4h10l2 4v8"/><path d="M5 10h14"/><circle cx="7.5" cy="17" r="2"/><circle cx="16.5" cy="17" r="2"/></>,
   routes: <><circle cx="5" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 6h4a3 3 0 0 1 3 3v0a3 3 0 0 1-3 3H9a3 3 0 0 0-3 3v1"/><path d="M8 18h9"/></>,
+  tracking: <><path d="M4 19h16"/><path d="M6 16V8l2-3h8l2 3v8"/><path d="M6 9h12"/><circle cx="8" cy="16" r="2"/><circle cx="16" cy="16" r="2"/><path d="M12 2v2"/><path d="M2 12H0"/><path d="M24 12h-2"/></>,
   team: <><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v2"/><circle cx="17" cy="7" r="2"/><path d="M16 12h1a4 4 0 0 1 4 4v2"/></>,
   logout: <><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></>,
   menu: <><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></>,

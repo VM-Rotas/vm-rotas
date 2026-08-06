@@ -11,6 +11,7 @@ const links: Array<{ href: string; label: string; icon: IconName; adminOnly?: bo
   { href: '/orders', label: 'Missões', icon: 'orders' },
   { href: '/vehicles', label: 'Veículos', icon: 'vehicles' },
   { href: '/routes', label: 'Roteirização', icon: 'routes' },
+  { href: '/tracking', label: 'Mapa ao vivo', icon: 'tracking' },
   { href: '/team', label: 'Equipe e acessos', icon: 'team', adminOnly: true },
 ];
 

@@ -19,17 +19,18 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  @ApiOperation({ summary: 'Autentica um usuário' })
+  @ApiOperation({ summary: 'Autentica um usuário no sistema web' })
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) response: Response,
   ): Promise<{ user: AuthUser }> {
     const result = await this.authService.login(dto);
+    const secure = this.config.get<boolean>('COOKIE_SECURE', false);
 
     response.cookie(AUTH_COOKIE_NAME, result.token, {
       httpOnly: true,
-      secure: this.config.get<boolean>('COOKIE_SECURE', false),
-      sameSite: this.config.get<boolean>('COOKIE_SECURE', false) ? 'none' : 'lax',
+      secure,
+      sameSite: 'lax',
       path: '/',
       maxAge: AUTH_TOKEN_TTL_SECONDS * 1000,
     });
@@ -37,16 +38,26 @@ export class AuthController {
     return { user: result.user };
   }
 
+  @Public()
+  @Post('mobile-login')
+  @ApiOperation({ summary: 'Autentica o aplicativo Android do motorista' })
+  mobileLogin(@Body() dto: LoginDto): Promise<{ accessToken: string; user: AuthUser }> {
+    return this.authService.mobileLogin(dto);
+  }
+
   @Post('logout')
   @ApiCookieAuth(AUTH_COOKIE_NAME)
   @ApiOperation({ summary: 'Encerra a sessão' })
   logout(@Res({ passthrough: true }) response: Response): { success: true } {
+    const secure = this.config.get<boolean>('COOKIE_SECURE', false);
+
     response.clearCookie(AUTH_COOKIE_NAME, {
       httpOnly: true,
-      secure: this.config.get<boolean>('COOKIE_SECURE', false),
-      sameSite: this.config.get<boolean>('COOKIE_SECURE', false) ? 'none' : 'lax',
+      secure,
+      sameSite: 'lax',
       path: '/',
     });
+
     return { success: true };
   }
 

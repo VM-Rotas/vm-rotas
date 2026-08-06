@@ -3,7 +3,10 @@ import { JwtService } from '@nestjs/jwt';
 import { compare } from 'bcryptjs';
 import type { AuthUser } from '../../common/types/auth-user';
 import { PrismaService } from '../prisma/prisma.service';
-import { AUTH_TOKEN_TTL_SECONDS } from './auth.constants';
+import {
+  AUTH_TOKEN_TTL_SECONDS,
+  MOBILE_AUTH_TOKEN_TTL_SECONDS,
+} from './auth.constants';
 import type { LoginDto } from './dto/login.dto';
 
 @Injectable()
@@ -14,6 +17,18 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto): Promise<{ token: string; user: AuthUser }> {
+    return this.authenticate(dto, AUTH_TOKEN_TTL_SECONDS);
+  }
+
+  async mobileLogin(dto: LoginDto): Promise<{ accessToken: string; user: AuthUser }> {
+    const result = await this.authenticate(dto, MOBILE_AUTH_TOKEN_TTL_SECONDS);
+    return { accessToken: result.token, user: result.user };
+  }
+
+  private async authenticate(
+    dto: LoginDto,
+    expiresIn: number,
+  ): Promise<{ token: string; user: AuthUser }> {
     const email = dto.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({ where: { email } });
 
@@ -29,9 +44,7 @@ export class AuthService {
       role: user.role,
     };
 
-    const token = await this.jwt.signAsync(authUser, {
-      expiresIn: AUTH_TOKEN_TTL_SECONDS,
-    });
+    const token = await this.jwt.signAsync(authUser, { expiresIn });
 
     await this.prisma.user.update({
       where: { id: user.id },

@@ -13,6 +13,7 @@ import { PrismaModule } from './modules/prisma/prisma.module';
 import { RoutesModule } from './modules/routes/routes.module';
 import { VehiclesModule } from './modules/vehicles/vehicles.module';
 import { UsersModule } from './modules/users/users.module';
+import { TrackingModule } from './modules/tracking/tracking.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { UsersModule } from './modules/users/users.module';
     UsersModule,
     RoutesModule,
     DashboardModule,
+    TrackingModule,
   ],
   providers: [
     {

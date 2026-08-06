@@ -46,6 +46,8 @@ export interface ServiceOrder {
   notes?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Horário real registrado quando a coleta ou entrega foi concluída. */
+  completedAt?: string | null;
 }
 
 export interface AddressSuggestion {
@@ -104,10 +106,23 @@ export interface RouteStop {
   longitude: string | number;
   plannedArrivalAt?: string | null;
   actualArrivalAt?: string | null;
+  actualDepartureAt?: string | null;
   distanceFromPreviousM: number;
   durationFromPreviousSec: number;
   notes?: string | null;
-  serviceOrder?: Pick<ServiceOrder, 'id' | 'code' | 'priority' | 'type' | 'recipientPhone'> | null;
+  serviceOrder?: Pick<
+    ServiceOrder,
+    | 'id'
+    | 'code'
+    | 'externalReference'
+    | 'priority'
+    | 'type'
+    | 'status'
+    | 'recipientName'
+    | 'recipientPhone'
+    | 'timeWindowStart'
+    | 'timeWindowEnd'
+  > | null;
 }
 
 export interface RoutePlan {
@@ -154,4 +169,48 @@ export interface SystemUser {
   lastLoginAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TrackingPosition {
+  latitude: number;
+  longitude: number;
+  accuracyM?: number | null;
+  speedKmh?: number | null;
+  heading?: number | null;
+  batteryPercent?: number | null;
+  recordedAt?: string | null;
+  ageSeconds?: number | null;
+  stale?: boolean;
+}
+
+export interface TrackingSessionSummary {
+  id: string;
+  active: boolean;
+  startedAt: string;
+  endedAt?: string | null;
+  deviceId?: string | null;
+  deviceName?: string | null;
+  driver: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  vehicle?: Pick<Vehicle, 'id' | 'name' | 'plate'>;
+  position?: TrackingPosition | null;
+}
+
+export interface LiveTrackingVehicle {
+  vehicle: Pick<Vehicle, 'id' | 'name' | 'plate' | 'status'>;
+  session?: Omit<TrackingSessionSummary, 'vehicle' | 'position'> | null;
+  position?: TrackingPosition | null;
+}
+
+export interface TrackingPoint {
+  latitude: number;
+  longitude: number;
+  accuracyM?: number | null;
+  speedKmh?: number | null;
+  heading?: number | null;
+  batteryPercent?: number | null;
+  recordedAt: string;
 }
