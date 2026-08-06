@@ -1,0 +1,360 @@
+.routingNotice {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.9rem;
+  border: 1px solid #c8e1dc;
+  border-radius: 14px;
+  background: #f2faf8;
+  box-shadow: var(--shadow-sm);
+}
+
+.routingNoticeIcon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+.routingNoticeIcon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.routingNotice div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.routingNotice strong {
+  font-size: 0.82rem;
+}
+
+.routingNotice span:not(.routingNoticeIcon) {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.statCard {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.statCard span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.statCard strong {
+  flex: 0 0 auto;
+  font-size: 1.3rem;
+  letter-spacing: -0.04em;
+}
+
+.statSuccess strong {
+  color: var(--success);
+}
+
+.statRoute strong {
+  color: var(--primary);
+}
+
+.statOccupied strong {
+  color: var(--warning);
+}
+
+.statMuted strong {
+  color: var(--muted);
+}
+
+.vehicleGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.vehicleCard {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 1.05rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.vehicleCard:hover {
+  border-color: #bfd3cf;
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.vehicleCardInactive {
+  opacity: 0.72;
+}
+
+.cardTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.vehicleIcon {
+  width: 50px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  color: var(--primary);
+  background: linear-gradient(145deg, var(--primary-light), #f2faf8);
+}
+
+.vehicleIcon svg {
+  width: 25px;
+  height: 25px;
+}
+
+.statusBadge {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.48rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 780;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.statusAvailable {
+  color: #196747;
+  border-color: #c4e6d5;
+  background: var(--success-light);
+}
+
+.statusInRoute {
+  color: #0c6060;
+  border-color: #c6e3de;
+  background: var(--primary-light);
+}
+
+.statusOccupied {
+  color: #875917;
+  border-color: #eed9b4;
+  background: var(--warning-light);
+}
+
+.statusMaintenance,
+.statusUnavailable {
+  color: #646f71;
+  border-color: #dfe6e4;
+  background: #edf1f0;
+}
+
+.vehicleTitle {
+  margin: 0.85rem 0;
+}
+
+.vehicleTitle h2 {
+  margin: 0;
+  font-size: 1.06rem;
+}
+
+.vehicleTitle span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.vehicleSpecs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.72rem;
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.vehicleSpecs div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.vehicleSpecs span {
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+.vehicleSpecs strong {
+  overflow: hidden;
+  font-size: 0.77rem;
+  text-overflow: ellipsis;
+}
+
+.statusSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+  padding: 0.85rem 0 0.2rem;
+}
+
+.statusSection label {
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 760;
+}
+
+.statusSection select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0.48rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.statusSection select:focus {
+  border-color: var(--primary);
+  outline: 2px solid rgba(15, 90, 92, 0.12);
+}
+
+.statusSection select:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.statusSection > small {
+  min-height: 28px;
+  color: var(--muted);
+  font-size: 0.67rem;
+  line-height: 1.35;
+}
+
+.inRouteBox {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 0.58rem;
+  align-items: center;
+  padding: 0.58rem 0.65rem;
+  border: 1px solid #c6e3de;
+  border-radius: 10px;
+  background: var(--primary-light);
+}
+
+.inRouteBox div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.inRouteBox strong {
+  font-size: 0.74rem;
+}
+
+.inRouteBox small {
+  color: var(--muted);
+  font-size: 0.63rem;
+}
+
+.cardActions {
+  min-height: 45px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: auto;
+  padding-top: 0.75rem;
+}
+
+.savingStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+@media (max-width: 1180px) {
+  .statsGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .vehicleGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .statsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vehicleGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .routingNotice {
+    grid-template-columns: 36px minmax(0, 1fr);
+    padding: 0.75rem;
+  }
+
+  .routingNoticeIcon {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+@media (max-width: 430px) {
+  .statsGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .statCard {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.22rem;
+  }
+
+  .vehicleSpecs {
+    grid-template-columns: 1fr;
+  }
+
+  .cardActions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

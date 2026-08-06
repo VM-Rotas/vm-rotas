@@ -12,7 +12,8 @@ const labels: Record<string, string> = {
   AVAILABLE: 'Disponível',
   IN_ROUTE: 'Em rota',
   MAINTENANCE: 'Manutenção',
-  INACTIVE: 'Inativo',
+  INACTIVE: 'Ocupado',
+  UNAVAILABLE: 'Indisponível',
   PENDING: 'Pendente',
   EN_ROUTE: 'A caminho',
   ARRIVED: 'No local',
@@ -25,8 +26,13 @@ const labels: Record<string, string> = {
   GOOGLE: 'Google',
 };
 
+const toneAliases: Record<string, string> = {
+  INACTIVE: 'high',
+  UNAVAILABLE: 'inactive',
+};
+
 export function StatusBadge({ value, compact = false }: { value: string; compact?: boolean }) {
-  const normalized = value.toLowerCase().replaceAll('_', '-');
+  const normalized = toneAliases[value] ?? value.toLowerCase().replaceAll('_', '-');
   return (
     <span className={`badge badge-${normalized}${compact ? ' badge-compact' : ''}`}>
       {labels[value] ?? value}
