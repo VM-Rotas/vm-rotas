@@ -62,27 +62,27 @@ const STATUS_META: Record<OperationalStatus, { label: string; description: strin
   AVAILABLE: {
     label: 'Disponível',
     description: 'Pode receber novas missões.',
-    tone: styles.statusAvailable,
+    tone: styles.statusAvailable ?? '',
   },
   IN_ROUTE: {
     label: 'Em rota',
     description: 'Status controlado pela execução da rota.',
-    tone: styles.statusInRoute,
+    tone: styles.statusInRoute ?? '',
   },
   OCCUPIED: {
     label: 'Ocupado',
     description: 'Temporariamente fora de novas rotas.',
-    tone: styles.statusOccupied,
+    tone: styles.statusOccupied ?? '',
   },
   MAINTENANCE: {
     label: 'Manutenção',
     description: 'Fora da operação por manutenção.',
-    tone: styles.statusMaintenance,
+    tone: styles.statusMaintenance ?? '',
   },
   UNAVAILABLE: {
     label: 'Indisponível',
     description: 'Desativado para a operação.',
-    tone: styles.statusUnavailable,
+    tone: styles.statusUnavailable ?? '',
   },
 };
 
