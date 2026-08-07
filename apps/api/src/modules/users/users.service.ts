@@ -67,11 +67,14 @@ export class UsersService {
       select: publicUserSelect,
     });
     if (!existing) throw new NotFoundException('Usuário não encontrado.');
+
     this.assertCanManageRole(user, existing.role);
     if (dto.role) this.assertCanManageRole(user, dto.role);
+
     if (id === user.sub && dto.active === false) {
       throw new BadRequestException('Você não pode desativar o próprio usuário.');
     }
+
     if (
       existing.role === 'OWNER' &&
       ((dto.role !== undefined && dto.role !== 'OWNER') || dto.active === false)
@@ -82,28 +85,49 @@ export class UsersService {
       if (ownerCount <= 1) throw new BadRequestException('A organização deve manter ao menos um proprietário ativo.');
     }
 
+    const normalizedEmail = dto.email?.trim().toLowerCase();
+    if (normalizedEmail && normalizedEmail !== existing.email) {
+      const duplicate = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      });
+      if (duplicate && duplicate.id !== id) {
+        throw new BadRequestException('Já existe um usuário com este e-mail.');
+      }
+    }
+
     const passwordHash = dto.password ? await hash(dto.password, 12) : undefined;
+
     return this.prisma.$transaction(async (transaction) => {
       const updated = await transaction.user.update({
         where: { id },
         data: {
           ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+          ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
           ...(dto.role !== undefined ? { role: dto.role } : {}),
           ...(dto.active !== undefined ? { active: dto.active } : {}),
           ...(passwordHash ? { passwordHash } : {}),
         },
         select: publicUserSelect,
       });
+
       await transaction.auditLog.create({
         data: {
           organizationId: user.organizationId,
           userId: user.sub,
-          action: 'USER_UPDATED',
+          action: dto.password ? 'USER_PASSWORD_RESET' : 'USER_UPDATED',
           entityType: 'User',
           entityId: id,
-          metadata: { fields: Object.keys(dto), role: updated.role, active: updated.active },
+          metadata: {
+            fields: Object.keys(dto).filter((field) => field !== 'password'),
+            passwordReset: Boolean(dto.password),
+            email: updated.email,
+            role: updated.role,
+            active: updated.active,
+          },
         },
       });
+
       return updated;
     });
   }
