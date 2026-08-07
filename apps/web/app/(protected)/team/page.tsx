@@ -215,10 +215,10 @@ export default function TeamPage() {
   }
 
   function generateTemporaryPassword() {
-    const values = new Uint32Array(2);
-    window.crypto.getRandomValues(values);
-    const firstPart = values[0].toString(36).slice(-4).toUpperCase().padStart(4, 'X');
-    const secondPart = String(values[1] % 10000).padStart(4, '0');
+    const [firstValue = Date.now(), secondValue = Math.floor(Math.random() * 10_000)] =
+      window.crypto.getRandomValues(new Uint32Array(2));
+    const firstPart = firstValue.toString(36).slice(-4).toUpperCase().padStart(4, 'X');
+    const secondPart = String(secondValue % 10_000).padStart(4, '0');
     const temporaryPassword = `VMR-${firstPart}-${secondPart}`;
     setPasswordForm({ password: temporaryPassword, confirmPassword: temporaryPassword });
     setShowPassword(true);
