@@ -41,3 +41,12 @@
 .formActions > div { display:flex; gap:.6rem; }
 @media (max-width: 900px) { .heading { flex-direction:column; } .weekGrid { grid-template-columns:repeat(7, 190px); } }
 @media (max-width: 620px) { .weekToolbar { grid-template-columns:1fr 1fr; } .weekTitle { grid-column:1/-1; grid-row:1; } .formRow { grid-template-columns:1fr; } .formActions { align-items:stretch; flex-direction:column-reverse; } .formActions > div { width:100%; } .formActions button { flex:1; } }
+
+/* Missões designadas aparecem em azul; indisponibilidades manuais permanecem em laranja. */
+.missionBlock { text-align:left; width:100%; border:1px solid #b9d8e8; background:#eef8fd; border-radius:9px; padding:.5rem; color:#244a5f; }
+.missionBlock strong,.missionBlock span,.missionBlock small { display:block; }
+.missionBlock strong { color:#176484; font-size:.74rem; }
+.missionBlock span { font-size:.75rem; margin:.15rem 0; }
+.missionBlock small { color:#5a7583; }
+.urgentMission { border-color:#efb6b6; background:#fff2f2; color:#6d3030; }
+.urgentMission strong { color:#b32626; }

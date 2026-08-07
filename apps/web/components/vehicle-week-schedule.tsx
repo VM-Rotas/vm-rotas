@@ -4,7 +4,7 @@ import { useAuth } from '@/components/auth-provider';
 import { ErrorBanner, LoadingBlock, SuccessBanner } from '@/components/feedback';
 import { Icon } from '@/components/icons';
 import { api, ApiError, queryString } from '@/lib/api';
-import type { Vehicle, VehicleUnavailability } from '@/lib/types';
+import type { ServiceOrder, Vehicle, VehicleUnavailability } from '@/lib/types';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import styles from './vehicle-week-schedule.module.css';
 
@@ -17,6 +17,18 @@ interface ScheduleForm {
   endTime: string;
   reason: string;
   destinationCity: string;
+}
+
+interface MissionAgendaItem {
+  key: string;
+  vehicleId: string;
+  reference: string;
+  plannedDate: string;
+  startsAt?: Date;
+  endsAt?: Date;
+  label: string;
+  city?: string;
+  urgent: boolean;
 }
 
 const WEEKDAY = new Intl.DateTimeFormat('pt-BR', { weekday: 'short' });
@@ -81,6 +93,61 @@ function timeLabel(block: VehicleUnavailability, date: string): string {
   return `${start}–${end}`;
 }
 
+function activeMission(order: ServiceOrder): boolean {
+  return ['PLANNED', 'READY', 'ROUTED', 'IN_PROGRESS'].includes(order.status);
+}
+
+function missionAgendaItems(orders: ServiceOrder[]): MissionAgendaItem[] {
+  const groups = new Map<string, ServiceOrder[]>();
+  for (const order of orders) {
+    if (!order.assignedVehicleId || !activeMission(order)) continue;
+    const reference = order.externalReference ?? order.code;
+    const key = `${order.assignedVehicleId}:${reference}`;
+    groups.set(key, [...(groups.get(key) ?? []), order]);
+  }
+
+  return [...groups.entries()].map(([key, grouped]) => {
+    const first = grouped[0]!;
+    const timed = grouped
+      .filter((order) => order.timeWindowStart)
+      .map((order) => {
+        const startsAt = new Date(order.timeWindowStart as string);
+        const endsAt = order.timeWindowEnd
+          ? new Date(order.timeWindowEnd)
+          : new Date(startsAt.getTime() + 60 * 60 * 1_000);
+        return { startsAt, endsAt };
+      });
+    const startsAt = timed.length > 0
+      ? new Date(Math.min(...timed.map((item) => item.startsAt.getTime())))
+      : undefined;
+    const endsAt = timed.length > 0
+      ? new Date(Math.max(...timed.map((item) => item.endsAt.getTime())))
+      : undefined;
+    const pickup = grouped.find((order) => order.type === 'PICKUP');
+    const delivery = grouped.find((order) => order.type === 'DELIVERY');
+    const label = pickup && delivery
+      ? `${pickup.recipientName} → ${delivery.recipientName}`
+      : (pickup ?? delivery ?? first).recipientName;
+
+    return {
+      key,
+      vehicleId: first.assignedVehicleId as string,
+      reference: first.externalReference ?? first.code,
+      plannedDate: first.plannedDate.slice(0, 10),
+      startsAt,
+      endsAt,
+      label,
+      city: (delivery ?? pickup ?? first).city,
+      urgent: grouped.some((order) => order.priority === 'URGENT'),
+    };
+  });
+}
+
+function missionTimeLabel(item: MissionAgendaItem): string {
+  if (!item.startsAt || !item.endsAt) return 'Horário não definido';
+  return `${TIME.format(item.startsAt)}–${TIME.format(item.endsAt)}`;
+}
+
 function initialScheduleForm(date: string, vehicleId = ''): ScheduleForm {
   return {
     vehicleId,
@@ -101,6 +168,7 @@ export function VehicleWeekSchedule() {
   const [weekStart, setWeekStart] = useState(mondayOf(today));
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [blocks, setBlocks] = useState<VehicleUnavailability[]>([]);
+  const [missionItems, setMissionItems] = useState<MissionAgendaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -122,14 +190,22 @@ export function VehicleWeekSchedule() {
           `/vehicle-unavailability${queryString({ from: weekStart, to: weekEnd })}`,
         ),
       ]);
+      const orderDays = await Promise.all(
+        days.map((day) =>
+          api<{ items: ServiceOrder[]; total: number }>(
+            `/orders${queryString({ date: day, take: 200 })}`,
+          ),
+        ),
+      );
       setVehicles(vehicleData.filter((vehicle) => vehicle.active));
       setBlocks(scheduleData);
+      setMissionItems(missionAgendaItems(orderDays.flatMap((result) => result.items)));
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível carregar a agenda da frota.');
     } finally {
       setLoading(false);
     }
-  }, [canManage, weekEnd, weekStart]);
+  }, [canManage, days, weekEnd, weekStart]);
 
   useEffect(() => {
     void load();
@@ -266,16 +342,30 @@ export function VehicleWeekSchedule() {
                   const vehicleBlocks = blocks.filter(
                     (block) => block.vehicleId === vehicle.id && overlaps(block, day),
                   );
+                  const vehicleMissions = missionItems.filter((item) => {
+                    if (item.vehicleId !== vehicle.id) return false;
+                    if (!item.startsAt) return item.plannedDate === day;
+                    const window = dayWindow(day);
+                    return item.startsAt < window.end && (item.endsAt ?? item.startsAt) > window.start;
+                  });
+                  const hasAgenda = vehicleBlocks.length > 0 || vehicleMissions.length > 0;
                   return (
                     <div className={styles.vehicleDay} key={vehicle.id}>
                       <div className={styles.vehicleName}>
                         <Icon name="vehicles" />
                         <span><strong>{vehicle.name}</strong><small>{vehicle.plate}</small></span>
                       </div>
-                      {vehicleBlocks.length === 0 ? (
+                      {!hasAgenda ? (
                         <span className={styles.available}>Disponível</span>
                       ) : (
                         <div className={styles.blockList}>
+                          {vehicleMissions.map((item) => (
+                            <div className={`${styles.missionBlock}${item.urgent ? ` ${styles.urgentMission}` : ''}`} key={item.key}>
+                              <strong>{missionTimeLabel(item)}</strong>
+                              <span>{item.urgent ? 'URGENTE · ' : ''}{item.label}</span>
+                              <small>{item.city ? `${item.city} · ` : ''}{item.reference}</small>
+                            </div>
+                          ))}
                           {vehicleBlocks.map((block) => (
                             <button className={styles.block} key={block.id} onClick={() => openEdit(block)}>
                               <strong>{timeLabel(block, day)}</strong>

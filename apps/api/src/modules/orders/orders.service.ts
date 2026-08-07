@@ -200,7 +200,7 @@ export class OrdersService {
 
     const plannedDate = parseDateOnly(dto.plannedDate);
     if (assignedVehicle) {
-      await this.vehicleUnavailability.assertVehicleAvailableForMission(
+      await this.vehicleUnavailability.assertVehicleFreeForMission(
         user,
         assignedVehicle.id,
         dto.plannedDate,
@@ -424,11 +424,12 @@ export class OrdersService {
               order.timeWindowEnd ??
               new Date((order.timeWindowStart as Date).getTime() + 60 * 60 * 1_000),
           }));
-        await this.vehicleUnavailability.assertVehicleAvailableForMission(
+        await this.vehicleUnavailability.assertVehicleFreeForMission(
           user,
           assignedVehicle.id,
           plannedDate,
           windows,
+          orders.map((order) => order.id),
         );
       }
     }

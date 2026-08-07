@@ -477,9 +477,52 @@ export default function OrdersPage() {
     return schedules.find((schedule) => windows.some((window) => scheduleOverlapsWindow(schedule, window)));
   }
 
-  function vehicleOptionText(vehicle: Vehicle, block?: VehicleUnavailability): string {
-    if (!block) return `${vehicle.name} (${vehicle.plate}) — ${vehicleStatusLabel(vehicle)}`;
-    return `${vehicle.name} (${vehicle.plate}) — Indisponível ${scheduleTimeLabel(block)} · ${block.reason}`;
+  function missionWindowsForForm(): Array<{ startsAt: Date; endsAt: Date }> {
+    return [
+      form.hasPickup ? missionWindow(date, form.pickupTime) : null,
+      form.hasDelivery ? missionWindow(date, form.deliveryTime) : null,
+    ].filter((value): value is { startsAt: Date; endsAt: Date } => value !== null);
+  }
+
+  function missionWindowsForView(mission: MissionView): Array<{ startsAt: Date; endsAt: Date }> {
+    return mission.orders
+      .filter((order) => order.timeWindowStart)
+      .map((order) => ({
+        startsAt: new Date(order.timeWindowStart as string),
+        endsAt: order.timeWindowEnd
+          ? new Date(order.timeWindowEnd)
+          : new Date(new Date(order.timeWindowStart as string).getTime() + 60 * 60 * 1_000),
+      }));
+  }
+
+  function blockingMission(vehicleId: string, windows: Array<{ startsAt: Date; endsAt: Date }>, excludeReference?: string): MissionView | undefined {
+    if (windows.length === 0) return undefined;
+    return missions.find((candidate) => {
+      if (candidate.reference === excludeReference) return false;
+      if (candidate.assignedVehicleId !== vehicleId) return false;
+      if (['COMPLETED', 'CANCELLED'].includes(candidate.status)) return false;
+      return missionWindowsForView(candidate).some((candidateWindow) =>
+        windows.some((window) => candidateWindow.startsAt < window.endsAt && candidateWindow.endsAt > window.startsAt),
+      );
+    });
+  }
+
+  function missionConflictLabel(mission: MissionView): string {
+    const windows = missionWindowsForView(mission);
+    if (windows.length === 0) return `Missão ${mission.reference}`;
+    const start = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(
+      new Date(Math.min(...windows.map((window) => window.startsAt.getTime()))),
+    );
+    const end = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false }).format(
+      new Date(Math.max(...windows.map((window) => window.endsAt.getTime()))),
+    );
+    return `Ocupado ${start}–${end} · ${mission.reference}`;
+  }
+
+  function vehicleOptionText(vehicle: Vehicle, block?: VehicleUnavailability, mission?: MissionView): string {
+    if (block) return `${vehicle.name} (${vehicle.plate}) — Indisponível ${scheduleTimeLabel(block)} · ${block.reason}`;
+    if (mission) return `${vehicle.name} (${vehicle.plate}) — ${missionConflictLabel(mission)}`;
+    return `${vehicle.name} (${vehicle.plate}) — ${vehicleStatusLabel(vehicle)}`;
   }
 
   function openForm() {
@@ -882,13 +925,18 @@ export default function OrdersPage() {
                         ) : null}
                         {vehicles.map((vehicle) => {
                           const scheduleBlock = blockingScheduleForMission(mission, vehicle.id);
+                          const missionBlock = blockingMission(
+                            vehicle.id,
+                            missionWindowsForView(mission),
+                            mission.reference,
+                          );
                           return (
                             <option
                               key={vehicle.id}
                               value={vehicle.id}
-                              disabled={vehicleOptionDisabled(vehicle) || Boolean(scheduleBlock)}
+                              disabled={vehicleOptionDisabled(vehicle) || Boolean(scheduleBlock) || Boolean(missionBlock)}
                             >
-                              {vehicleOptionText(vehicle, scheduleBlock)}
+                              {vehicleOptionText(vehicle, scheduleBlock, missionBlock)}
                             </option>
                           );
                         })}
@@ -950,19 +998,20 @@ export default function OrdersPage() {
               <option value="">Automático — o sistema escolhe na roteirização</option>
               {vehicles.map((vehicle) => {
                 const scheduleBlock = blockingScheduleForForm(vehicle.id);
+                const missionBlock = blockingMission(vehicle.id, missionWindowsForForm());
                 return (
                   <option
                     key={vehicle.id}
                     value={vehicle.id}
-                    disabled={vehicleOptionDisabled(vehicle) || Boolean(scheduleBlock)}
+                    disabled={vehicleOptionDisabled(vehicle) || Boolean(scheduleBlock) || Boolean(missionBlock)}
                   >
-                    {vehicleOptionText(vehicle, scheduleBlock)}
+                    {vehicleOptionText(vehicle, scheduleBlock, missionBlock)}
                   </option>
                 );
               })}
             </select>
             <small className="mission-vehicle-help">
-              Escolha Fiorino ou Van para fixar a missão. Veículos com indisponibilidade programada no horário ficam bloqueados automaticamente.
+              Escolha Fiorino ou Van para fixar a missão. Veículos com indisponibilidade programada ou outra missão no mesmo horário ficam bloqueados automaticamente.
             </small>
           </label>
 

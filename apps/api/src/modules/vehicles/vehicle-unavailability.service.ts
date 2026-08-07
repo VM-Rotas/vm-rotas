@@ -232,6 +232,54 @@ export class VehicleUnavailabilityService {
     );
   }
 
+  async assertVehicleFreeForMission(
+    user: AuthUser,
+    vehicleId: string,
+    plannedDate: string,
+    windows: Array<{ startsAt: Date; endsAt: Date }>,
+    excludeOrderIds: string[] = [],
+  ): Promise<void> {
+    await this.assertVehicleAvailableForMission(user, vehicleId, plannedDate, windows);
+
+    // Sem horário definido não existe uma janela segura para bloquear. A missão
+    // continua aparecendo na agenda como "sem horário", mas não impede outra
+    // designação até que um horário seja informado.
+    if (windows.length === 0) return;
+
+    const plannedDay = new Date(`${plannedDate}T00:00:00.000Z`);
+    const orders = await this.prisma.serviceOrder.findMany({
+      where: {
+        organizationId: user.organizationId,
+        assignedVehicleId: vehicleId,
+        plannedDate: plannedDay,
+        status: { in: ['PLANNED', 'READY', 'ROUTED', 'IN_PROGRESS'] },
+        timeWindowStart: { not: null },
+        ...(excludeOrderIds.length > 0 ? { id: { notIn: excludeOrderIds } } : {}),
+      },
+      include: { vehicle: { select: { name: true } } },
+      orderBy: { timeWindowStart: 'asc' },
+    });
+
+    const conflict = orders.find((order) => {
+      const startsAt = order.timeWindowStart as Date;
+      const endsAt = order.timeWindowEnd ?? new Date(startsAt.getTime() + 60 * 60 * 1_000);
+      return windows.some((window) =>
+        this.overlaps(startsAt, endsAt, window.startsAt, window.endsAt),
+      );
+    });
+
+    if (!conflict) return;
+
+    const startsAt = conflict.timeWindowStart as Date;
+    const endsAt = conflict.timeWindowEnd ?? new Date(startsAt.getTime() + 60 * 60 * 1_000);
+    const reference = conflict.externalReference ?? conflict.code;
+    const vehicleName = conflict.vehicle?.name ?? 'O veículo';
+
+    throw new BadRequestException(
+      `${vehicleName} já está designado para a missão ${reference} de ${this.localTime(startsAt)} a ${this.localTime(endsAt)}. Escolha outro veículo ou outro horário.`,
+    );
+  }
+
   async periodsByVehicle(
     organizationId: string,
     vehicleIds: string[],
