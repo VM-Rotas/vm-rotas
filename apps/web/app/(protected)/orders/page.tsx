@@ -12,7 +12,7 @@ import {
 import { StatusBadge } from '@/components/status-badge';
 import { api, ApiError, queryString } from '@/lib/api';
 import { formatDuration, formatTime, todayDateInput } from '@/lib/format';
-import type { AddressSuggestion, OrderPriority, OrderStatus, ServiceOrder, Vehicle } from '@/lib/types';
+import type { AddressSuggestion, OrderPriority, OrderStatus, ServiceOrder, Vehicle, VehicleUnavailability } from '@/lib/types';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
 interface MissionForm {
@@ -174,6 +174,26 @@ function vehicleStatusLabel(vehicle: Pick<Vehicle, 'active' | 'status'>): string
 
 function vehicleOptionDisabled(vehicle: Pick<Vehicle, 'active' | 'status'>): boolean {
   return !vehicle.active || vehicle.status === 'MAINTENANCE';
+}
+
+function missionWindow(date: string, time?: string | null): { startsAt: Date; endsAt: Date } | null {
+  if (!time) return null;
+  const startsAt = new Date(`${date}T${time}:00-03:00`);
+  if (Number.isNaN(startsAt.getTime())) return null;
+  return { startsAt, endsAt: new Date(startsAt.getTime() + 60 * 60 * 1_000) };
+}
+
+function scheduleOverlapsWindow(
+  schedule: VehicleUnavailability,
+  window: { startsAt: Date; endsAt: Date },
+): boolean {
+  return new Date(schedule.startsAt) < window.endsAt && new Date(schedule.endsAt) > window.startsAt;
+}
+
+function scheduleTimeLabel(schedule: VehicleUnavailability): string {
+  if (schedule.allDay) return 'dia inteiro';
+  const format = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${format.format(new Date(schedule.startsAt))}–${format.format(new Date(schedule.endsAt))}`;
 }
 
 function missionTimeValue(mission: MissionView): number {
@@ -344,6 +364,7 @@ export default function OrdersPage() {
   const [activeTab, setActiveTab] = useState<MissionTab>('AVAILABLE');
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [vehicleUnavailability, setVehicleUnavailability] = useState<VehicleUnavailability[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -378,11 +399,19 @@ export default function OrdersPage() {
   const loadVehicles = useCallback(async () => {
     if (!canManage) return;
     try {
-      setVehicles(await api<Vehicle[]>('/vehicles'));
+      const [vehicleData, scheduleData] = await Promise.all([
+        api<Vehicle[]>('/vehicles'),
+        api<VehicleUnavailability[]>(
+          `/vehicle-unavailability${queryString({ from: date, to: date })}`,
+        ),
+      ]);
+      setVehicles(vehicleData);
+      setVehicleUnavailability(scheduleData);
     } catch {
       setVehicles([]);
+      setVehicleUnavailability([]);
     }
-  }, [canManage]);
+  }, [canManage, date]);
 
   useEffect(() => {
     void loadVehicles();
@@ -419,6 +448,39 @@ export default function OrdersPage() {
         ? completedMissions
         : cancelledMissions;
   const urgentCount = availableMissions.filter((mission) => mission.priority === 'URGENT').length;
+
+  function blockingScheduleForForm(vehicleId: string): VehicleUnavailability | undefined {
+    const schedules = vehicleUnavailability.filter((item) => item.vehicleId === vehicleId);
+    const windows = [
+      form.hasPickup ? missionWindow(date, form.pickupTime) : null,
+      form.hasDelivery ? missionWindow(date, form.deliveryTime) : null,
+    ].filter((value): value is { startsAt: Date; endsAt: Date } => value !== null);
+
+    if (windows.length === 0) return schedules.find((schedule) => schedule.allDay);
+    return schedules.find((schedule) => windows.some((window) => scheduleOverlapsWindow(schedule, window)));
+  }
+
+  function blockingScheduleForMission(
+    mission: MissionView,
+    vehicleId: string,
+  ): VehicleUnavailability | undefined {
+    const schedules = vehicleUnavailability.filter((item) => item.vehicleId === vehicleId);
+    const windows = mission.orders
+      .filter((order) => order.timeWindowStart)
+      .map((order) => ({
+        startsAt: new Date(order.timeWindowStart as string),
+        endsAt: order.timeWindowEnd
+          ? new Date(order.timeWindowEnd)
+          : new Date(new Date(order.timeWindowStart as string).getTime() + 60 * 60 * 1_000),
+      }));
+    if (windows.length === 0) return schedules.find((schedule) => schedule.allDay);
+    return schedules.find((schedule) => windows.some((window) => scheduleOverlapsWindow(schedule, window)));
+  }
+
+  function vehicleOptionText(vehicle: Vehicle, block?: VehicleUnavailability): string {
+    if (!block) return `${vehicle.name} (${vehicle.plate}) — ${vehicleStatusLabel(vehicle)}`;
+    return `${vehicle.name} (${vehicle.plate}) — Indisponível ${scheduleTimeLabel(block)} · ${block.reason}`;
+  }
 
   function openForm() {
     setError('');
@@ -818,15 +880,18 @@ export default function OrdersPage() {
                         !vehicles.some((vehicle) => vehicle.id === mission.assignedVehicleId) ? (
                           <option value={mission.assignedVehicleId}>Veículo atual não disponível</option>
                         ) : null}
-                        {vehicles.map((vehicle) => (
-                          <option
-                            key={vehicle.id}
-                            value={vehicle.id}
-                            disabled={vehicleOptionDisabled(vehicle)}
-                          >
-                            {vehicle.name} ({vehicle.plate}) — {vehicleStatusLabel(vehicle)}
-                          </option>
-                        ))}
+                        {vehicles.map((vehicle) => {
+                          const scheduleBlock = blockingScheduleForMission(mission, vehicle.id);
+                          return (
+                            <option
+                              key={vehicle.id}
+                              value={vehicle.id}
+                              disabled={vehicleOptionDisabled(vehicle) || Boolean(scheduleBlock)}
+                            >
+                              {vehicleOptionText(vehicle, scheduleBlock)}
+                            </option>
+                          );
+                        })}
                       </select>
                     </label>
                   ) : mission.assignedVehicle ? (
@@ -883,18 +948,21 @@ export default function OrdersPage() {
               }
             >
               <option value="">Automático — o sistema escolhe na roteirização</option>
-              {vehicles.map((vehicle) => (
-                <option
-                  key={vehicle.id}
-                  value={vehicle.id}
-                  disabled={vehicleOptionDisabled(vehicle)}
-                >
-                  {vehicle.name} ({vehicle.plate}) — {vehicleStatusLabel(vehicle)}
-                </option>
-              ))}
+              {vehicles.map((vehicle) => {
+                const scheduleBlock = blockingScheduleForForm(vehicle.id);
+                return (
+                  <option
+                    key={vehicle.id}
+                    value={vehicle.id}
+                    disabled={vehicleOptionDisabled(vehicle) || Boolean(scheduleBlock)}
+                  >
+                    {vehicleOptionText(vehicle, scheduleBlock)}
+                  </option>
+                );
+              })}
             </select>
             <small className="mission-vehicle-help">
-              Escolha Fiorino ou Van para fixar a missão nesse veículo. Sem escolha, o sistema decide pela melhor rota.
+              Escolha Fiorino ou Van para fixar a missão. Veículos com indisponibilidade programada no horário ficam bloqueados automaticamente.
             </small>
           </label>
 

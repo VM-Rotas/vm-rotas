@@ -13,7 +13,6 @@ type MissionOrderStatus =
   | 'CANCELLED';
 
 type MissionPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
-
 const OPEN_STATUSES: MissionOrderStatus[] = ['PLANNED', 'READY', 'ROUTED', 'IN_PROGRESS'];
 
 @Injectable()
@@ -22,16 +21,21 @@ export class DashboardService {
 
   async summary(user: AuthUser, date?: string) {
     const routeDate = parseDateOnly(date);
+    const dateKey = formatDateOnly(routeDate);
+    const dayStart = new Date(`${dateKey}T00:00:00-03:00`);
+    const nextDate = new Date(`${dateKey}T12:00:00.000Z`);
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const dayEnd = new Date(`${nextDate.toISOString().slice(0, 10)}T00:00:00-03:00`);
     const orderWhere = {
       organizationId: user.organizationId,
       plannedDate: routeDate,
     } as const;
-
     const [
       orders,
       activeRoutes,
       completedRoutes,
-      availableVehicles,
+      availableVehicleCount,
+      fullDayUnavailability,
       routes,
     ] = await this.prisma.$transaction([
       this.prisma.serviceOrder.findMany({
@@ -56,6 +60,16 @@ export class DashboardService {
       this.prisma.vehicle.count({
         where: { organizationId: user.organizationId, active: true, status: 'AVAILABLE' },
       }),
+      this.prisma.vehicleUnavailability.findMany({
+        where: {
+          organizationId: user.organizationId,
+          allDay: true,
+          startsAt: { lt: dayEnd },
+          endsAt: { gt: dayStart },
+          vehicle: { active: true, status: 'AVAILABLE' },
+        },
+        select: { vehicleId: true },
+      }),
       this.prisma.routePlan.findMany({
         where: {
           organizationId: user.organizationId,
@@ -73,7 +87,6 @@ export class DashboardService {
         orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
       }),
     ]);
-
     const missions = new Map<
       string,
       Array<{ status: MissionOrderStatus; priority: MissionPriority }>
@@ -87,7 +100,6 @@ export class DashboardService {
         { status: order.status, priority: order.priority },
       ]);
     }
-
     const grouped = [...missions.values()];
     const totalOrders = grouped.length;
     const completedOrders = grouped.filter((mission) =>
@@ -103,6 +115,8 @@ export class DashboardService {
     ).length;
     const completionRate =
       totalOrders === 0 ? 0 : Math.round((completedOrders / totalOrders) * 100);
+    const scheduledUnavailable = new Set(fullDayUnavailability.map((item) => item.vehicleId)).size;
+    const availableVehicles = Math.max(0, availableVehicleCount - scheduledUnavailable);
 
     return {
       date: formatDateOnly(routeDate),

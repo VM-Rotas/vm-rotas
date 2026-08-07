@@ -222,3 +222,23 @@ export interface TrackingPoint {
   batteryPercent?: number | null;
   recordedAt: string;
 }
+
+export interface VehicleUnavailability {
+  id: string;
+  organizationId: string;
+  vehicleId: string;
+  createdById?: string | null;
+  startsAt: string;
+  endsAt: string;
+  allDay: boolean;
+  reason: string;
+  destinationCity?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  vehicle: Pick<Vehicle, 'id' | 'name' | 'plate' | 'active' | 'status'>;
+  createdBy?: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+}

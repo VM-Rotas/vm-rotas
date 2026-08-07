@@ -7,6 +7,7 @@ import type { AuthUser } from '../../common/types/auth-user';
 import { formatDateOnly, parseDateOnly } from '../../common/utils/date.utils';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { VehicleUnavailabilityService } from '../vehicles/vehicle-unavailability.service';
 import type { AutoRecalculateUrgencyDto } from './dto/auto-recalculate-urgency.dto';
 import type { ListRoutesQueryDto } from './dto/list-routes-query.dto';
 import type { OptimizeRoutesDto } from './dto/optimize-routes.dto';
@@ -27,6 +28,7 @@ export class RoutesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly optimizer: RouteOptimizationService,
+    private readonly vehicleUnavailability: VehicleUnavailabilityService,
   ) {}
 
   list(user: AuthUser, query: ListRoutesQueryDto) {
@@ -88,7 +90,7 @@ export class RoutesService {
   async optimize(user: AuthUser, dto: OptimizeRoutesDto) {
     const routeDate = parseDateOnly(dto.routeDate);
     const depot = await this.findDepot(user.organizationId, dto.depotId);
-    const vehicles = await this.prisma.vehicle.findMany({
+    const availableVehicles = await this.prisma.vehicle.findMany({
       where: {
         organizationId: user.organizationId,
         active: true,
@@ -97,8 +99,18 @@ export class RoutesService {
       },
       orderBy: { name: 'asc' },
     });
+    const unavailableByVehicle = await this.vehicleUnavailability.periodsByVehicle(
+      user.organizationId,
+      availableVehicles.map((vehicle) => vehicle.id),
+      routeDate,
+    );
+    const vehicles = availableVehicles.filter(
+      (vehicle) => !(unavailableByVehicle.get(vehicle.id) ?? []).some((period) => period.allDay),
+    );
     if (vehicles.length === 0) {
-      throw new BadRequestException('Nenhum veículo disponível foi encontrado.');
+      throw new BadRequestException(
+        'Nenhum veículo disponível foi encontrado. Confira também a agenda programada da frota.',
+      );
     }
 
     const selectedVehicleIds = vehicles.map((vehicle) => vehicle.id);
@@ -156,7 +168,13 @@ export class RoutesService {
       );
     }
 
-    const context = this.buildContext(routeDate, depot, eligibleOrders, vehicles);
+    const context = this.buildContext(
+      routeDate,
+      depot,
+      eligibleOrders,
+      vehicles,
+      unavailableByVehicle,
+    );
     const requestedProvider = dto.provider ?? undefined;
     const run = await this.prisma.optimizationRun.create({
       data: {
@@ -380,6 +398,14 @@ export class RoutesService {
                 longitude: Number(route.depot.longitude),
               };
 
+    const routeUnavailablePeriods = (
+      await this.vehicleUnavailability.periodsByVehicle(
+        user.organizationId,
+        [route.vehicle.id],
+        route.routeDate,
+      )
+    ).get(route.vehicle.id) ?? [];
+
     const context: OptimizationContext = {
       routeDate: route.routeDate,
       startAt: hasLatitude
@@ -393,7 +419,7 @@ export class RoutesService {
         longitude: Number(route.depot.longitude),
       },
       orders: remainingOrders.map((order) => this.mapOrder(order)),
-      vehicles: [this.mapVehicle(route.vehicle)],
+      vehicles: [this.mapVehicle(route.vehicle, routeUnavailablePeriods)],
     };
 
     const run = await this.prisma.optimizationRun.create({
@@ -659,6 +685,13 @@ export class RoutesService {
             latitude: Number(route.depot.latitude),
             longitude: Number(route.depot.longitude),
           };
+      const routeUnavailablePeriods = (
+        await this.vehicleUnavailability.periodsByVehicle(
+          user.organizationId,
+          [route.vehicle.id],
+          route.routeDate,
+        )
+      ).get(route.vehicle.id) ?? [];
       const context: OptimizationContext = {
         routeDate: route.routeDate,
         startAt: this.recalculationStartAt(lockedActiveStop, route.status),
@@ -670,7 +703,7 @@ export class RoutesService {
           longitude: Number(route.depot.longitude),
         },
         orders: remainingOrders.map((order) => this.mapOrder(order)),
-        vehicles: [this.mapVehicle(route.vehicle)],
+        vehicles: [this.mapVehicle(route.vehicle, routeUnavailablePeriods)],
       };
 
       const candidateResult = await this.optimizer.optimize(context, 'local');
@@ -888,6 +921,10 @@ export class RoutesService {
     },
     orders: Parameters<RoutesService['mapOrder']>[0][],
     vehicles: Parameters<RoutesService['mapVehicle']>[0][],
+    unavailableByVehicle: Map<
+      string,
+      Array<{ startsAt: Date; endsAt: Date; allDay: boolean; reason: string }>
+    > = new Map(),
   ): OptimizationContext {
     const depotPoint = {
       label: depot.name,
@@ -900,7 +937,9 @@ export class RoutesService {
       startLocation: depotPoint,
       endLocation: depotPoint,
       orders: orders.map((order) => this.mapOrder(order)),
-      vehicles: vehicles.map((vehicle) => this.mapVehicle(vehicle)),
+      vehicles: vehicles.map((vehicle) =>
+        this.mapVehicle(vehicle, unavailableByVehicle.get(vehicle.id) ?? []),
+      ),
     };
   }
 
@@ -946,15 +985,23 @@ export class RoutesService {
     };
   }
 
-  private mapVehicle(vehicle: {
-    id: string;
-    plate: string;
-    name: string;
-    capacityWeightKg: unknown;
-    capacityVolumeM3: unknown;
-    startHour: string | null;
-    endHour: string | null;
-  }): OptimizableVehicle {
+  private mapVehicle(
+    vehicle: {
+      id: string;
+      plate: string;
+      name: string;
+      capacityWeightKg: unknown;
+      capacityVolumeM3: unknown;
+      startHour: string | null;
+      endHour: string | null;
+    },
+    unavailablePeriods: Array<{
+      startsAt: Date;
+      endsAt: Date;
+      allDay?: boolean;
+      reason?: string;
+    }> = [],
+  ): OptimizableVehicle {
     return {
       id: vehicle.id,
       plate: vehicle.plate,
@@ -965,6 +1012,7 @@ export class RoutesService {
         vehicle.capacityVolumeM3 == null ? undefined : Number(vehicle.capacityVolumeM3),
       startHour: vehicle.startHour ?? undefined,
       endHour: vehicle.endHour ?? undefined,
+      unavailablePeriods,
     };
   }
 

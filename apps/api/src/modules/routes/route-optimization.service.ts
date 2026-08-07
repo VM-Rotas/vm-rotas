@@ -26,6 +26,21 @@ export class RouteOptimizationService {
       requestedProvider ??
       this.config.get<'local' | 'google'>('ROUTE_OPTIMIZATION_PROVIDER', 'local');
 
+    const hasProgrammedUnavailability = context.vehicles.some(
+      (vehicle) => (vehicle.unavailablePeriods?.length ?? 0) > 0,
+    );
+
+    if (provider === 'google' && hasProgrammedUnavailability) {
+      const result = await this.local.optimize(context);
+      return {
+        ...result,
+        warnings: [
+          'Motor local usado para respeitar os períodos programados de indisponibilidade dos veículos.',
+          ...result.warnings,
+        ],
+      };
+    }
+
     if (provider === 'google') {
       try {
         return await this.google.optimize(context);
@@ -42,7 +57,6 @@ export class RouteOptimizationService {
         };
       }
     }
-
     return this.local.optimize(context);
   }
 

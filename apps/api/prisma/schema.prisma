@@ -97,6 +97,7 @@ model Organization {
   auditLogs        AuditLog[]
   trackingSessions TrackingSession[]
   trackingPoints   TrackingPoint[]
+  vehicleUnavailability VehicleUnavailability[]
 }
 
 model User {
@@ -118,6 +119,7 @@ model User {
   auditLogs          AuditLog[]
   trackingSessions   TrackingSession[]
   trackingPoints     TrackingPoint[]
+  vehicleUnavailability VehicleUnavailability[] @relation("VehicleUnavailabilityCreatedBy")
 
   @@index([organizationId, role])
 }
@@ -162,6 +164,7 @@ model Vehicle {
   assignedOrders   ServiceOrder[] @relation("AssignedVehicleOrders")
   trackingSessions TrackingSession[]
   trackingPoints   TrackingPoint[]
+  unavailability   VehicleUnavailability[]
 
   @@unique([organizationId, plate])
   @@index([organizationId, status, active])
@@ -327,6 +330,28 @@ model AuditLog {
   @@index([organizationId, createdAt])
 }
 
+
+
+model VehicleUnavailability {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @db.Uuid
+  vehicleId       String   @db.Uuid
+  createdById     String?  @db.Uuid
+  startsAt        DateTime
+  endsAt          DateTime
+  allDay          Boolean  @default(false)
+  reason          String
+  destinationCity String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vehicle      Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("VehicleUnavailabilityCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, startsAt, endsAt])
+  @@index([vehicleId, startsAt, endsAt])
+}
 
 model TrackingSession {
   id                 String   @id @default(uuid()) @db.Uuid

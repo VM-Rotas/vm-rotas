@@ -21,6 +21,13 @@ export interface OptimizableOrder extends GeoPoint {
   timeWindowEnd?: Date;
 }
 
+export interface VehicleUnavailablePeriod {
+  startsAt: Date;
+  endsAt: Date;
+  allDay?: boolean;
+  reason?: string;
+}
+
 export interface OptimizableVehicle {
   id: string;
   plate: string;
@@ -29,6 +36,7 @@ export interface OptimizableVehicle {
   capacityVolumeM3?: number;
   startHour?: string;
   endHour?: string;
+  unavailablePeriods?: VehicleUnavailablePeriod[];
 }
 
 export interface OptimizationContext {

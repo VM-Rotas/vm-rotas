@@ -9,6 +9,7 @@ import { parseDateOnly } from '../../common/utils/date.utils';
 import { Prisma, type ServiceOrder } from '../../generated/prisma/client';
 import { MapsService } from '../maps/maps.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { VehicleUnavailabilityService } from '../vehicles/vehicle-unavailability.service';
 import type { AssignMissionVehicleDto } from './dto/assign-mission-vehicle.dto';
 import type { CreateMissionDto } from './dto/create-mission.dto';
 import type { CreateOrderDto } from './dto/create-order.dto';
@@ -38,6 +39,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly maps: MapsService,
+    private readonly vehicleUnavailability: VehicleUnavailabilityService,
   ) {}
 
   async list(user: AuthUser, query: ListOrdersQueryDto) {
@@ -197,6 +199,14 @@ export class OrdersService {
     }
 
     const plannedDate = parseDateOnly(dto.plannedDate);
+    if (assignedVehicle) {
+      await this.vehicleUnavailability.assertVehicleAvailableForMission(
+        user,
+        assignedVehicle.id,
+        dto.plannedDate,
+        this.missionWindows(dto.plannedDate, [dto.pickupTime, dto.deliveryTime]),
+      );
+    }
     const reference = this.generateMissionCode();
     const geocodedPoints = await Promise.all(
       points.map(async (point) => ({
@@ -370,6 +380,9 @@ export class OrdersService {
         id: true,
         status: true,
         assignedVehicleId: true,
+        plannedDate: true,
+        timeWindowStart: true,
+        timeWindowEnd: true,
       },
     });
 
@@ -399,6 +412,25 @@ export class OrdersService {
     }
     if (assignedVehicle?.status === 'MAINTENANCE') {
       throw new BadRequestException('O veículo escolhido está em manutenção.');
+    }
+    if (assignedVehicle) {
+      const plannedDate = orders[0]?.plannedDate.toISOString().slice(0, 10);
+      if (plannedDate) {
+        const windows = orders
+          .filter((order) => order.timeWindowStart)
+          .map((order) => ({
+            startsAt: order.timeWindowStart as Date,
+            endsAt:
+              order.timeWindowEnd ??
+              new Date((order.timeWindowStart as Date).getTime() + 60 * 60 * 1_000),
+          }));
+        await this.vehicleUnavailability.assertVehicleAvailableForMission(
+          user,
+          assignedVehicle.id,
+          plannedDate,
+          windows,
+        );
+      }
     }
 
     const previousVehicleIds = [
@@ -881,6 +913,19 @@ export class OrdersService {
     } catch {
       return null;
     }
+  }
+
+  private missionWindows(
+    plannedDate: string,
+    times: Array<string | undefined>,
+  ): Array<{ startsAt: Date; endsAt: Date }> {
+    return times
+      .map((time) => this.missionDateTime(plannedDate, time))
+      .filter((value): value is Date => value !== null)
+      .map((startsAt) => ({
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 60 * 60 * 1_000),
+      }));
   }
 
   private missionDateTime(plannedDate: string, time?: string): Date | null {

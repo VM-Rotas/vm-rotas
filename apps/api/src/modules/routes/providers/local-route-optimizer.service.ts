@@ -246,6 +246,7 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
     let clock = context.startAt
       ? new Date(context.startAt)
       : this.vehicleStartAt(context.routeDate, vehicle.startHour);
+    clock = this.nextAvailableInstant(clock, vehicle);
     let totalDistanceMeters = 0;
     let totalDurationSeconds = 0;
     let accumulatedPenalty = 0;
@@ -265,15 +266,28 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
       const ranked = candidates
         .map((order) => {
           const metric = this.travelMetric(matrix, current, order);
-          const rawArrivalMs = clock.getTime() + metric.durationSeconds * 1_000;
+          const travel = this.travelTiming(clock, metric.durationSeconds, vehicle);
           const windowStartMs = order.timeWindowStart?.getTime();
           const windowEndMs = order.timeWindowEnd?.getTime();
-          const waitingSeconds = windowStartMs
-            ? Math.max(0, Math.round((windowStartMs - rawArrivalMs) / 1_000))
-            : 0;
-          const serviceStartMs = rawArrivalMs + waitingSeconds * 1_000;
+          const afterTimeWindow = windowStartMs
+            ? new Date(Math.max(travel.arrivalAt.getTime(), windowStartMs))
+            : new Date(travel.arrivalAt);
+          const serviceStartAt = this.nextServiceStart(
+            afterTimeWindow,
+            order.serviceDurationMin * 60,
+            vehicle,
+          );
+          const serviceEndAt = new Date(
+            serviceStartAt.getTime() + order.serviceDurationMin * 60 * 1_000,
+          );
+          const waitingSeconds = Math.max(
+            0,
+            Math.round(
+              (serviceStartAt.getTime() - travel.arrivalAt.getTime()) / 1_000,
+            ) + travel.waitingSeconds,
+          );
           const lateSeconds = windowEndMs
-            ? Math.max(0, Math.round((serviceStartMs - windowEndMs) / 1_000))
+            ? Math.max(0, Math.round((serviceStartAt.getTime() - windowEndMs) / 1_000))
             : 0;
           const deadlineSeconds = windowEndMs
             ? Math.max(0, Math.round((windowEndMs - clock.getTime()) / 1_000))
@@ -291,6 +305,8 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
             metric,
             waitingSeconds,
             lateSeconds,
+            serviceStartAt,
+            serviceEndAt,
             score,
           };
         })
@@ -301,21 +317,12 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
       const next = selected.order;
       remaining.splice(remaining.findIndex((order) => order.id === next.id), 1);
 
-      const rawArrivalAt = new Date(clock.getTime() + selected.metric.durationSeconds * 1_000);
-      const plannedArrivalAt = next.timeWindowStart && rawArrivalAt < next.timeWindowStart
-        ? new Date(next.timeWindowStart)
-        : rawArrivalAt;
-      const waitingSeconds = Math.max(
-        0,
-        Math.round((plannedArrivalAt.getTime() - rawArrivalAt.getTime()) / 1_000),
-      );
-      const plannedDepartureAt = new Date(
-        plannedArrivalAt.getTime() + next.serviceDurationMin * 60 * 1_000,
-      );
+      const plannedArrivalAt = selected.serviceStartAt;
+      const plannedDepartureAt = selected.serviceEndAt;
 
       totalDistanceMeters += selected.metric.distanceMeters;
       totalDurationSeconds +=
-        selected.metric.durationSeconds + waitingSeconds + next.serviceDurationMin * 60;
+        selected.metric.durationSeconds + selected.waitingSeconds + next.serviceDurationMin * 60;
       accumulatedPenalty +=
         selected.lateSeconds * 30 + PRIORITY_SCORE[next.priority] * 60;
       clock = plannedDepartureAt;
@@ -336,11 +343,12 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
     }
 
     const returnMetric = this.travelMetric(matrix, current, context.endLocation);
+    const returnTravel = this.travelTiming(clock, returnMetric.durationSeconds, vehicle);
     totalDistanceMeters += returnMetric.distanceMeters;
-    totalDurationSeconds += returnMetric.durationSeconds;
+    totalDurationSeconds += returnMetric.durationSeconds + returnTravel.waitingSeconds;
     points.push(context.endLocation);
 
-    const routeEndAt = new Date(clock.getTime() + returnMetric.durationSeconds * 1_000);
+    const routeEndAt = returnTravel.arrivalAt;
     const vehicleEndAt = this.vehicleEndAt(context.routeDate, vehicle.endHour);
     const exceededEndBySeconds = vehicleEndAt
       ? Math.max(0, Math.round((routeEndAt.getTime() - vehicleEndAt.getTime()) / 1_000))
@@ -528,6 +536,75 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
         minute ?? 0,
       ),
     );
+  }
+
+  private unavailablePeriods(vehicle: OptimizableVehicle) {
+    return [...(vehicle.unavailablePeriods ?? [])]
+      .filter((period) => period.endsAt > period.startsAt)
+      .sort((left, right) => left.startsAt.getTime() - right.startsAt.getTime());
+  }
+
+  private nextAvailableInstant(value: Date, vehicle: OptimizableVehicle): Date {
+    let result = new Date(value);
+    for (const period of this.unavailablePeriods(vehicle)) {
+      if (result >= period.startsAt && result < period.endsAt) {
+        result = new Date(period.endsAt);
+      }
+    }
+    return result;
+  }
+
+  private travelTiming(
+    startsAt: Date,
+    durationSeconds: number,
+    vehicle: OptimizableVehicle,
+  ): { arrivalAt: Date; waitingSeconds: number } {
+    let departureAt = this.nextAvailableInstant(startsAt, vehicle);
+    const periods = this.unavailablePeriods(vehicle);
+
+    for (let guard = 0; guard < periods.length + 2; guard += 1) {
+      const arrivalAt = new Date(departureAt.getTime() + durationSeconds * 1_000);
+      const conflict = periods.find(
+        (period) => period.startsAt < arrivalAt && period.endsAt > departureAt,
+      );
+      if (!conflict) {
+        return {
+          arrivalAt,
+          waitingSeconds: Math.max(
+            0,
+            Math.round((departureAt.getTime() - startsAt.getTime()) / 1_000),
+          ),
+        };
+      }
+      departureAt = new Date(conflict.endsAt);
+    }
+
+    return {
+      arrivalAt: new Date(departureAt.getTime() + durationSeconds * 1_000),
+      waitingSeconds: Math.max(
+        0,
+        Math.round((departureAt.getTime() - startsAt.getTime()) / 1_000),
+      ),
+    };
+  }
+
+  private nextServiceStart(
+    requestedStart: Date,
+    serviceDurationSeconds: number,
+    vehicle: OptimizableVehicle,
+  ): Date {
+    let start = this.nextAvailableInstant(requestedStart, vehicle);
+    const periods = this.unavailablePeriods(vehicle);
+
+    for (let guard = 0; guard < periods.length + 2; guard += 1) {
+      const end = new Date(start.getTime() + serviceDurationSeconds * 1_000);
+      const conflict = periods.find(
+        (period) => period.startsAt < end && period.endsAt > start,
+      );
+      if (!conflict) return start;
+      start = new Date(conflict.endsAt);
+    }
+    return start;
   }
 
   private distanceMeters(a: GeoPoint, b: GeoPoint): number {

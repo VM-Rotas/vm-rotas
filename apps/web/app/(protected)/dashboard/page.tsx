@@ -1,22 +1,20 @@
 'use client';
-
 import { EmptyState, ErrorBanner, LoadingBlock } from '@/components/feedback';
 import { Icon } from '@/components/icons';
 import { PageHeader } from '@/components/page-header';
 import { StatCard } from '@/components/stat-card';
 import { StatusBadge } from '@/components/status-badge';
+import { VehicleWeekSchedule } from '@/components/vehicle-week-schedule';
 import { api, ApiError, queryString } from '@/lib/api';
 import { formatDistance, formatDuration, formatTime, todayDateInput } from '@/lib/format';
 import type { DashboardSummary } from '@/lib/types';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-
 export default function DashboardPage() {
   const [date, setDate] = useState(todayDateInput());
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -32,7 +30,6 @@ export default function DashboardPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
   const metrics = data?.metrics;
   return (
     <>
@@ -47,10 +44,8 @@ export default function DashboardPage() {
           </div>
         }
       />
-
       {error ? <ErrorBanner message={error} /> : null}
       {loading && !data ? <LoadingBlock label="Carregando indicadores..." /> : null}
-
       {metrics ? (
         <>
           <section className="stats-grid">
@@ -59,7 +54,6 @@ export default function DashboardPage() {
             <StatCard icon="routes" label="Rotas em operação" value={metrics.activeRoutes} detail={`${metrics.completedRoutes} concluídas`} tone="warning" />
             <StatCard icon="vehicles" label="Veículos disponíveis" value={metrics.availableVehicles} detail="Prontos para roteirizar" tone="success" />
           </section>
-
           <section className="dashboard-grid">
             <article className="panel progress-panel">
               <div className="panel-heading">
@@ -76,7 +70,6 @@ export default function DashboardPage() {
                 <p>{metrics.urgentOrders ? `Existem ${metrics.urgentOrders} urgência(s) que podem exigir reotimização.` : 'Nenhuma urgência aberta para esta data.'}</p>
               </div>
             </article>
-
             <article className="panel action-panel">
               <div className="panel-heading"><div><span className="eyebrow">Próximo passo</span><h2>Planejar operação</h2></div></div>
               <p>Organize as missões prontas entre os dois veículos e gere a sequência ideal de paradas.</p>
@@ -84,6 +77,8 @@ export default function DashboardPage() {
               <Link className="text-link" href={`/orders?date=${date}`}>Revisar missões</Link>
             </article>
           </section>
+
+          <VehicleWeekSchedule />
 
           <section className="panel routes-overview">
             <div className="panel-heading">
