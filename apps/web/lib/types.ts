@@ -22,6 +22,14 @@ export interface ServiceOrder {
   id: string;
   code: string;
   externalReference?: string | null;
+  assignedVehicleId?: string | null;
+  assignedVehicle?: {
+    id: string;
+    name: string;
+    plate: string;
+    status: 'AVAILABLE' | 'IN_ROUTE' | 'MAINTENANCE' | 'INACTIVE';
+    active: boolean;
+  } | null;
   type: 'DELIVERY' | 'PICKUP';
   status: OrderStatus;
   priority: OrderPriority;

@@ -40,6 +40,7 @@ type GoogleOptimizationResponse = {
 interface MissionShipment {
   id: string;
   orders: OptimizableOrder[];
+  assignedVehicleId?: string;
   pickups: OptimizableOrder[];
   deliveries: OptimizableOrder[];
 }
@@ -110,6 +111,7 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
     return [...groups.entries()].map(([id, groupedOrders]) => ({
       id,
       orders: groupedOrders,
+      assignedVehicleId: groupedOrders.find((order) => order.assignedVehicleId)?.assignedVehicleId,
       pickups: groupedOrders.filter((order) => order.type === 'PICKUP'),
       deliveries: groupedOrders.filter((order) => order.type === 'DELIVERY'),
     }));
@@ -118,6 +120,9 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
   private buildRequest(context: OptimizationContext, shipments: MissionShipment[]) {
     const globalStartTime = this.atOperationalHour(context.routeDate, 8).toISOString();
     const globalEndTime = this.atOperationalHour(context.routeDate, 20).toISOString();
+    const vehicleIndexById = new Map(
+      context.vehicles.map((vehicle, index) => [vehicle.id, index] as const),
+    );
 
     return {
       timeout: '30s',
@@ -137,8 +142,14 @@ export class GoogleRouteOptimizerService implements RouteOptimizer {
             'LOW',
           );
 
+          const assignedVehicleIndex = shipment.assignedVehicleId
+            ? vehicleIndexById.get(shipment.assignedVehicleId)
+            : undefined;
+
           return {
             label: shipment.id,
+            allowedVehicleIndices:
+              assignedVehicleIndex == null ? undefined : [assignedVehicleIndex],
             pickups: shipment.pickups.length
               ? shipment.pickups.map((order) => this.visitRequest(order, globalStartTime, globalEndTime))
               : undefined,

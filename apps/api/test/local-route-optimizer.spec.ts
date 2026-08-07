@@ -135,6 +135,81 @@ describe('LocalRouteOptimizerService', () => {
     );
   });
 
+
+  it('mantém uma missão no veículo designado manualmente', async () => {
+    const data = context();
+    data.orders = [
+      {
+        id: 'assigned-order',
+        code: 'ASSIGNED-1',
+        assignedVehicleId: 'vehicle-2',
+        label: 'Missão designada',
+        address: 'Destino',
+        type: 'DELIVERY',
+        priority: 'NORMAL',
+        serviceDurationMin: 10,
+        latitude: -23.8,
+        longitude: -51.8,
+      },
+    ];
+
+    const result = await optimizer().optimize(data);
+    const route = result.routes.find((item) =>
+      item.visits.some((visit) => visit.orderId === 'assigned-order'),
+    );
+
+    assert.equal(route?.vehicleId, 'vehicle-2');
+  });
+
+  it('prioriza urgência e horário desejado sem ignorar o tempo de deslocamento', async () => {
+    const data = context();
+    data.vehicles = [data.vehicles[0]!];
+    data.orders = [
+      {
+        id: 'normal-close',
+        code: 'N-CLOSE',
+        label: 'Normal perto',
+        address: 'Perto da base',
+        type: 'DELIVERY',
+        priority: 'NORMAL',
+        serviceDurationMin: 10,
+        latitude: -23.864,
+        longitude: -51.855,
+      },
+      {
+        id: 'urgent-far',
+        code: 'U-FAR',
+        label: 'Urgente mais longe',
+        address: 'Cidade vizinha',
+        type: 'PICKUP',
+        priority: 'URGENT',
+        serviceDurationMin: 10,
+        timeWindowStart: new Date('2026-07-30T12:30:00.000Z'),
+        timeWindowEnd: new Date('2026-07-30T13:30:00.000Z'),
+        latitude: -23.79,
+        longitude: -51.72,
+      },
+    ];
+
+    const result = await optimizer().optimize(data);
+    assert.equal(result.routes.length, 1);
+    assert.equal(result.routes[0]?.visits[0]?.orderId, 'urgent-far');
+    assert.ok(result.routes[0]?.visits[0]?.plannedArrivalAt instanceof Date);
+  });
+
+  it('usa o momento do recálculo para gerar novos horários previstos', async () => {
+    const data = context();
+    data.vehicles = [data.vehicles[0]!];
+    data.startAt = new Date('2026-07-30T15:00:00.000Z');
+    data.orders = [data.orders[0]!];
+
+    const result = await optimizer().optimize(data);
+    const arrival = result.routes[0]?.visits[0]?.plannedArrivalAt;
+
+    assert.ok(arrival);
+    assert.ok(arrival.getTime() >= data.startAt.getTime());
+  });
+
   it('marca uma ordem como não alocada quando ela excede toda a capacidade', async () => {
     const data = context();
     data.orders = [

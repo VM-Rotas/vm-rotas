@@ -3,6 +3,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import type { AuthUser } from '../../common/types/auth-user';
+import { AssignMissionVehicleDto } from './dto/assign-mission-vehicle.dto';
 import { CreateMissionDto } from './dto/create-mission.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ListOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -31,6 +32,17 @@ export class OrdersController {
   @ApiOperation({ summary: 'Cria uma missão com coleta, entrega ou ambas' })
   createMission(@CurrentUser() user: AuthUser, @Body() dto: CreateMissionDto) {
     return this.orders.createMission(user, dto);
+  }
+
+  @Patch('missions/:reference/vehicle')
+  @Roles('OWNER', 'ADMIN', 'DISPATCHER')
+  @ApiOperation({ summary: 'Designa ou remove o veículo de uma missão disponível' })
+  assignMissionVehicle(
+    @CurrentUser() user: AuthUser,
+    @Param('reference') reference: string,
+    @Body() dto: AssignMissionVehicleDto,
+  ) {
+    return this.orders.assignMissionVehicle(user, reference, dto);
   }
 
   @Delete('missions/:reference')

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
   GeoPoint,
@@ -15,17 +15,46 @@ interface VehicleBucket {
   orders: OptimizableOrder[];
   weightKg: number;
   volumeM3: number;
-  lastPoint: GeoPoint;
+  plan?: PlannedRoute;
 }
 
 interface MissionJob {
   id: string;
   orders: OptimizableOrder[];
+  assignedVehicleId?: string;
   entryPoint: OptimizableOrder;
-  exitPoint: OptimizableOrder;
   priorityScore: number;
+  earliestWindowMs: number;
   weightKg: number;
   volumeM3: number;
+}
+
+interface TravelMetric {
+  distanceMeters: number;
+  durationSeconds: number;
+}
+
+interface TravelMatrix {
+  points: GeoPoint[];
+  indexByKey: Map<string, number>;
+  metrics: TravelMetric[][];
+  source: 'GEOAPIFY' | 'FALLBACK';
+}
+
+interface PlannedRoute extends OptimizedVehicleRoute {
+  score: number;
+  exceededEndBySeconds: number;
+}
+
+interface GeoapifyMatrixCell {
+  distance?: number;
+  time?: number;
+  source_index?: number;
+  target_index?: number;
+}
+
+interface GeoapifyMatrixResponse {
+  sources_to_targets?: GeoapifyMatrixCell[][];
 }
 
 const PRIORITY_SCORE: Record<OptimizableOrder['priority'], number> = {
@@ -35,72 +64,124 @@ const PRIORITY_SCORE: Record<OptimizableOrder['priority'], number> = {
   LOW: 3,
 };
 
+const PRIORITY_PENALTY_SECONDS: Record<OptimizableOrder['priority'], number> = {
+  URGENT: 0,
+  HIGH: 1_800,
+  NORMAL: 3_600,
+  LOW: 5_400,
+};
+
 @Injectable()
 export class LocalRouteOptimizerService implements RouteOptimizer {
+  private readonly logger = new Logger(LocalRouteOptimizerService.name);
   private readonly averageSpeedKmh: number;
+  private readonly geoapifyApiKey?: string;
 
   constructor(config: ConfigService) {
     this.averageSpeedKmh = config.get<number>('LOCAL_AVG_SPEED_KMH', 35);
+    this.geoapifyApiKey = config.get<string>('GEOAPIFY_API_KEY')?.trim() || undefined;
   }
 
   async optimize(context: OptimizationContext): Promise<OptimizationResult> {
-    const warnings: string[] = [
-      'O modo local usa distância geodésica e velocidade média; não considera trânsito nem malha viária.',
-    ];
+    const warnings: string[] = [];
+    const matrix = await this.createTravelMatrix(context);
+
+    if (matrix.source === 'FALLBACK') {
+      warnings.push(
+        'A malha viária não respondeu. A rota foi calculada por aproximação e deve ser conferida antes da saída.',
+      );
+    }
 
     const buckets: VehicleBucket[] = context.vehicles.map((vehicle) => ({
       vehicle,
       orders: [],
       weightKg: 0,
       volumeM3: 0,
-      lastPoint: context.startLocation,
     }));
 
     const skippedOrderIds: string[] = [];
+    let assignmentSkippedJobs = 0;
     const jobs = this.groupMissionJobs(context.orders).sort((a, b) => {
       const priority = a.priorityScore - b.priorityScore;
       if (priority !== 0) return priority;
-      return this.distanceMeters(context.startLocation, a.entryPoint) -
-        this.distanceMeters(context.startLocation, b.entryPoint);
+
+      const time = a.earliestWindowMs - b.earliestWindowMs;
+      if (time !== 0) return time;
+
+      return (
+        this.travelMetric(matrix, context.startLocation, a.entryPoint).durationSeconds -
+        this.travelMetric(matrix, context.startLocation, b.entryPoint).durationSeconds
+      );
     });
 
     for (const job of jobs) {
-      const feasible = buckets
+      const matchingBuckets = job.assignedVehicleId
+        ? buckets.filter((bucket) => bucket.vehicle.id === job.assignedVehicleId)
+        : buckets;
+      const feasible = matchingBuckets
         .filter((bucket) => this.hasJobCapacity(bucket, job))
-        .map((bucket) => ({
-          bucket,
-          score:
-            this.distanceMeters(bucket.lastPoint, job.entryPoint) +
-            bucket.orders.length * 3_000 +
-            this.jobCapacityPenalty(bucket, job),
-        }))
+        .map((bucket) => {
+          const candidateOrders = [...bucket.orders, ...job.orders];
+          const plan = this.planRoute(context, bucket.vehicle, candidateOrders, matrix);
+          const currentScore = bucket.plan?.score ?? 0;
+          const incrementalScore = Math.max(0, plan.score - currentScore);
+
+          return {
+            bucket,
+            plan,
+            score:
+              incrementalScore +
+              bucket.orders.length * 180 +
+              this.jobCapacityPenalty(bucket, job),
+          };
+        })
         .sort((a, b) => a.score - b.score);
 
-      const selected = feasible[0]?.bucket;
+      const selected = feasible[0];
       if (!selected) {
         skippedOrderIds.push(...job.orders.map((order) => order.id));
+        if (job.assignedVehicleId) assignmentSkippedJobs += 1;
         continue;
       }
 
-      selected.orders.push(...job.orders);
-      selected.weightKg += job.weightKg;
-      selected.volumeM3 += job.volumeM3;
-      selected.lastPoint = job.exitPoint;
+      selected.bucket.orders.push(...job.orders);
+      selected.bucket.weightKg += job.weightKg;
+      selected.bucket.volumeM3 += job.volumeM3;
+      selected.bucket.plan = selected.plan;
     }
 
     if (skippedOrderIds.length > 0) {
-      warnings.push(`${skippedOrderIds.length} parada(s) não couberam na capacidade informada da frota.`);
+      warnings.push(
+        `${skippedOrderIds.length} parada(s) não couberam na capacidade ou no período informado da frota.`,
+      );
+    }
+    if (assignmentSkippedJobs > 0) {
+      warnings.push(
+        `${assignmentSkippedJobs} missão(ões) designada(s) não puderam ser alocadas no veículo escolhido.`,
+      );
     }
 
-    const routes = buckets
+    const plannedRoutes = buckets
       .filter((bucket) => bucket.orders.length > 0)
-      .map((bucket) => this.buildRoute(context, bucket));
+      .map((bucket) => bucket.plan ?? this.planRoute(context, bucket.vehicle, bucket.orders, matrix));
+
+    for (const route of plannedRoutes) {
+      if (route.exceededEndBySeconds > 0) {
+        warnings.push(
+          `Uma rota ultrapassa o horário final do veículo em aproximadamente ${Math.ceil(route.exceededEndBySeconds / 60)} minuto(s).`,
+        );
+      }
+    }
+
+    const routes: OptimizedVehicleRoute[] = plannedRoutes.map(
+      ({ score: _score, exceededEndBySeconds: _exceeded, ...route }) => route,
+    );
 
     return {
       provider: 'LOCAL',
       routes,
       skippedOrderIds,
-      warnings,
+      warnings: [...new Set(warnings)],
     };
   }
 
@@ -122,30 +203,54 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
       const first = ordered[0];
       if (!first) throw new Error('Uma missão sem paradas não pode ser otimizada.');
       const pickup = ordered.find((order) => order.type === 'PICKUP');
-      const delivery = [...ordered].reverse().find((order) => order.type === 'DELIVERY');
+      const timeWindows = ordered
+        .map((order) => order.timeWindowStart?.getTime())
+        .filter((value): value is number => value != null && Number.isFinite(value));
+
+      const assignedVehicleIds = [
+        ...new Set(
+          ordered
+            .map((order) => order.assignedVehicleId)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ];
 
       return {
         id,
         orders: ordered,
+        assignedVehicleId: assignedVehicleIds[0],
         entryPoint: pickup ?? first,
-        exitPoint: delivery ?? ordered[ordered.length - 1] ?? first,
         priorityScore: Math.min(...ordered.map((order) => PRIORITY_SCORE[order.priority])),
+        earliestWindowMs:
+          timeWindows.length > 0 ? Math.min(...timeWindows) : Number.MAX_SAFE_INTEGER,
         weightKg: ordered.reduce((total, order) => total + (order.weightKg ?? 0), 0),
         volumeM3: ordered.reduce((total, order) => total + (order.volumeM3 ?? 0), 0),
       };
     });
   }
 
-  private buildRoute(context: OptimizationContext, bucket: VehicleBucket): OptimizedVehicleRoute {
-    const remaining = [...bucket.orders];
-    const sequence: OptimizableOrder[] = [];
+  private planRoute(
+    context: OptimizationContext,
+    vehicle: OptimizableVehicle,
+    orders: OptimizableOrder[],
+    matrix: TravelMatrix,
+  ): PlannedRoute {
+    const remaining = [...orders];
     const missionsWithPickup = new Set(
-      bucket.orders
+      orders
         .filter((order) => order.type === 'PICKUP' && order.missionId)
         .map((order) => order.missionId as string),
     );
     const completedPickups = new Set<string>();
     let current: GeoPoint = context.startLocation;
+    let clock = context.startAt
+      ? new Date(context.startAt)
+      : this.vehicleStartAt(context.routeDate, vehicle.startHour);
+    let totalDistanceMeters = 0;
+    let totalDurationSeconds = 0;
+    let accumulatedPenalty = 0;
+    const points: GeoPoint[] = [context.startLocation];
+    const visits: OptimizedVehicleRoute['visits'] = [];
 
     while (remaining.length > 0) {
       const eligible = remaining.filter(
@@ -157,67 +262,100 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
       );
       const candidates = eligible.length > 0 ? eligible : remaining;
 
-      candidates.sort((a, b) => {
-        const urgencyPenaltyA = PRIORITY_SCORE[a.priority] * 35_000;
-        const urgencyPenaltyB = PRIORITY_SCORE[b.priority] * 35_000;
-        return (
-          this.distanceMeters(current, a) + urgencyPenaltyA -
-          (this.distanceMeters(current, b) + urgencyPenaltyB)
-        );
-      });
+      const ranked = candidates
+        .map((order) => {
+          const metric = this.travelMetric(matrix, current, order);
+          const rawArrivalMs = clock.getTime() + metric.durationSeconds * 1_000;
+          const windowStartMs = order.timeWindowStart?.getTime();
+          const windowEndMs = order.timeWindowEnd?.getTime();
+          const waitingSeconds = windowStartMs
+            ? Math.max(0, Math.round((windowStartMs - rawArrivalMs) / 1_000))
+            : 0;
+          const serviceStartMs = rawArrivalMs + waitingSeconds * 1_000;
+          const lateSeconds = windowEndMs
+            ? Math.max(0, Math.round((serviceStartMs - windowEndMs) / 1_000))
+            : 0;
+          const deadlineSeconds = windowEndMs
+            ? Math.max(0, Math.round((windowEndMs - clock.getTime()) / 1_000))
+            : 21_600;
+          const deadlinePenalty = Math.min(deadlineSeconds, 21_600) * 0.08;
+          const score =
+            metric.durationSeconds +
+            waitingSeconds * 0.05 +
+            lateSeconds * 30 +
+            PRIORITY_PENALTY_SECONDS[order.priority] +
+            deadlinePenalty;
 
-      const next = candidates[0];
-      if (!next) break;
+          return {
+            order,
+            metric,
+            waitingSeconds,
+            lateSeconds,
+            score,
+          };
+        })
+        .sort((a, b) => a.score - b.score);
+
+      const selected = ranked[0];
+      if (!selected) break;
+      const next = selected.order;
       remaining.splice(remaining.findIndex((order) => order.id === next.id), 1);
-      sequence.push(next);
-      current = next;
-      if (next.type === 'PICKUP' && next.missionId) completedPickups.add(next.missionId);
-    }
 
-    const startAt = this.vehicleStartAt(context.routeDate, bucket.vehicle.startHour);
-    let clock = startAt;
-    let previous: GeoPoint = context.startLocation;
-    let totalDistanceMeters = 0;
-    let totalDurationSeconds = 0;
-    const points: GeoPoint[] = [context.startLocation];
-
-    const visits = sequence.map((order) => {
-      const distanceFromPreviousM = Math.round(this.distanceMeters(previous, order));
-      const durationFromPreviousSec = this.travelDurationSeconds(distanceFromPreviousM);
-      const plannedArrivalAt = new Date(clock.getTime() + durationFromPreviousSec * 1_000);
+      const rawArrivalAt = new Date(clock.getTime() + selected.metric.durationSeconds * 1_000);
+      const plannedArrivalAt = next.timeWindowStart && rawArrivalAt < next.timeWindowStart
+        ? new Date(next.timeWindowStart)
+        : rawArrivalAt;
+      const waitingSeconds = Math.max(
+        0,
+        Math.round((plannedArrivalAt.getTime() - rawArrivalAt.getTime()) / 1_000),
+      );
       const plannedDepartureAt = new Date(
-        plannedArrivalAt.getTime() + order.serviceDurationMin * 60 * 1_000,
+        plannedArrivalAt.getTime() + next.serviceDurationMin * 60 * 1_000,
       );
 
-      totalDistanceMeters += distanceFromPreviousM;
-      totalDurationSeconds += durationFromPreviousSec + order.serviceDurationMin * 60;
+      totalDistanceMeters += selected.metric.distanceMeters;
+      totalDurationSeconds +=
+        selected.metric.durationSeconds + waitingSeconds + next.serviceDurationMin * 60;
+      accumulatedPenalty +=
+        selected.lateSeconds * 30 + PRIORITY_SCORE[next.priority] * 60;
       clock = plannedDepartureAt;
-      previous = order;
-      points.push(order);
+      current = next;
+      points.push(next);
 
-      return {
-        orderId: order.id,
+      visits.push({
+        orderId: next.id,
         plannedArrivalAt,
         plannedDepartureAt,
-        distanceFromPreviousM,
-        durationFromPreviousSec,
-      };
-    });
+        distanceFromPreviousM: selected.metric.distanceMeters,
+        durationFromPreviousSec: selected.metric.durationSeconds,
+      });
 
-    const distanceToDepotMeters = Math.round(this.distanceMeters(previous, context.endLocation));
-    const durationToDepotSeconds = this.travelDurationSeconds(distanceToDepotMeters);
-    totalDistanceMeters += distanceToDepotMeters;
-    totalDurationSeconds += durationToDepotSeconds;
+      if (next.type === 'PICKUP' && next.missionId) {
+        completedPickups.add(next.missionId);
+      }
+    }
+
+    const returnMetric = this.travelMetric(matrix, current, context.endLocation);
+    totalDistanceMeters += returnMetric.distanceMeters;
+    totalDurationSeconds += returnMetric.durationSeconds;
     points.push(context.endLocation);
 
+    const routeEndAt = new Date(clock.getTime() + returnMetric.durationSeconds * 1_000);
+    const vehicleEndAt = this.vehicleEndAt(context.routeDate, vehicle.endHour);
+    const exceededEndBySeconds = vehicleEndAt
+      ? Math.max(0, Math.round((routeEndAt.getTime() - vehicleEndAt.getTime()) / 1_000))
+      : 0;
+
     return {
-      vehicleId: bucket.vehicle.id,
+      vehicleId: vehicle.id,
       visits,
       totalDistanceMeters,
       totalDurationSeconds,
       encodedPolyline: this.encodePolyline(points),
-      distanceToDepotMeters,
-      durationToDepotSeconds,
+      distanceToDepotMeters: returnMetric.distanceMeters,
+      durationToDepotSeconds: returnMetric.durationSeconds,
+      score: totalDurationSeconds + accumulatedPenalty + exceededEndBySeconds * 20,
+      exceededEndBySeconds,
     };
   }
 
@@ -236,7 +374,128 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
     const volumeRatio = bucket.vehicle.capacityVolumeM3
       ? (bucket.volumeM3 + job.volumeM3) / bucket.vehicle.capacityVolumeM3
       : 0;
-    return Math.max(weightRatio, volumeRatio) * 10_000;
+    return Math.max(weightRatio, volumeRatio) * 600;
+  }
+
+  private async createTravelMatrix(context: OptimizationContext): Promise<TravelMatrix> {
+    const points = this.uniquePoints([
+      context.startLocation,
+      ...context.orders,
+      context.endLocation,
+    ]);
+    const fallback = this.fallbackMatrix(points);
+
+    if (!this.geoapifyApiKey || points.length < 2) return fallback;
+
+    try {
+      const response = await fetch(
+        `https://api.geoapify.com/v1/routematrix?apiKey=${encodeURIComponent(this.geoapifyApiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'drive',
+            traffic: 'approximated',
+            type: 'balanced',
+            units: 'metric',
+            sources: points.map((point) => ({
+              location: [point.longitude, point.latitude],
+            })),
+            targets: points.map((point) => ({
+              location: [point.longitude, point.latitude],
+            })),
+          }),
+          signal: AbortSignal.timeout(20_000),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as GeoapifyMatrixResponse;
+      const rows = payload.sources_to_targets;
+      if (!rows || rows.length !== points.length) {
+        throw new Error('Matriz incompleta');
+      }
+
+      const metrics = rows.map((row, sourceIndex) =>
+        points.map((_target, targetIndex) => {
+          const cell = row[targetIndex];
+          const backup = fallback.metrics[sourceIndex]?.[targetIndex] ?? {
+            distanceMeters: 0,
+            durationSeconds: 60,
+          };
+          const distanceMeters = Number(cell?.distance);
+          const durationSeconds = Number(cell?.time);
+          return {
+            distanceMeters: Number.isFinite(distanceMeters)
+              ? Math.max(0, Math.round(distanceMeters))
+              : backup.distanceMeters,
+            durationSeconds: Number.isFinite(durationSeconds)
+              ? Math.max(0, Math.round(durationSeconds))
+              : backup.durationSeconds,
+          };
+        }),
+      );
+
+      return {
+        points,
+        indexByKey: fallback.indexByKey,
+        metrics,
+        source: 'GEOAPIFY',
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Route Matrix indisponível; usando cálculo local: ${
+          error instanceof Error ? error.message : 'erro desconhecido'
+        }`,
+      );
+      return fallback;
+    }
+  }
+
+  private fallbackMatrix(points: GeoPoint[]): TravelMatrix {
+    const indexByKey = new Map<string, number>();
+    points.forEach((point, index) => indexByKey.set(this.pointKey(point), index));
+
+    const metrics = points.map((source) =>
+      points.map((target) => {
+        const distanceMeters = Math.round(this.distanceMeters(source, target));
+        return {
+          distanceMeters,
+          durationSeconds: distanceMeters === 0 ? 0 : this.travelDurationSeconds(distanceMeters),
+        };
+      }),
+    );
+
+    return { points, indexByKey, metrics, source: 'FALLBACK' };
+  }
+
+  private uniquePoints(points: GeoPoint[]): GeoPoint[] {
+    const unique = new Map<string, GeoPoint>();
+    for (const point of points) unique.set(this.pointKey(point), point);
+    return [...unique.values()];
+  }
+
+  private travelMetric(matrix: TravelMatrix, from: GeoPoint, to: GeoPoint): TravelMetric {
+    const sourceIndex = matrix.indexByKey.get(this.pointKey(from));
+    const targetIndex = matrix.indexByKey.get(this.pointKey(to));
+    const metric = sourceIndex == null || targetIndex == null
+      ? undefined
+      : matrix.metrics[sourceIndex]?.[targetIndex];
+
+    if (metric) return metric;
+
+    const distanceMeters = Math.round(this.distanceMeters(from, to));
+    return {
+      distanceMeters,
+      durationSeconds: distanceMeters === 0 ? 0 : this.travelDurationSeconds(distanceMeters),
+    };
+  }
+
+  private pointKey(point: GeoPoint): string {
+    return `${point.latitude.toFixed(7)},${point.longitude.toFixed(7)}`;
   }
 
   private travelDurationSeconds(distanceMeters: number): number {
@@ -252,6 +511,20 @@ export class LocalRouteOptimizerService implements RouteOptimizer {
         routeDate.getUTCMonth(),
         routeDate.getUTCDate(),
         (hour ?? 8) + 3,
+        minute ?? 0,
+      ),
+    );
+  }
+
+  private vehicleEndAt(routeDate: Date, endHour?: string): Date | null {
+    if (!endHour) return null;
+    const [hour, minute] = endHour.split(':').map(Number);
+    return new Date(
+      Date.UTC(
+        routeDate.getUTCFullYear(),
+        routeDate.getUTCMonth(),
+        routeDate.getUTCDate(),
+        (hour ?? 18) + 3,
         minute ?? 0,
       ),
     );

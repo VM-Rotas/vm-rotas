@@ -26,6 +26,12 @@ function createHarness() {
     auditLog: { create: async () => ({ id: 'audit-1' }) },
   };
   const prisma = {
+    vehicle: {
+      findFirst: async ({ where }: { where: { id?: string } }) =>
+        where.id
+          ? { id: where.id, name: 'Fiorino 01', plate: 'VMR1A01', status: 'AVAILABLE' }
+          : null,
+    },
     $transaction: async <T>(callback: (client: typeof transaction) => Promise<T>) =>
       callback(transaction),
   } as unknown as PrismaService;
@@ -90,6 +96,42 @@ describe('OrdersService.createMission', () => {
     assert.equal(harness.geocodeCalls(), 0);
     assert.ok(harness.created[0]?.timeWindowStart instanceof Date);
     assert.ok(harness.created[0]?.timeWindowEnd instanceof Date);
+  });
+
+  it('grava o mesmo veículo designado na coleta e na entrega', async () => {
+    const harness = createHarness();
+    const result = await harness.service.createMission(user, {
+      plannedDate: '2026-07-30',
+      assignedVehicleId: '11111111-1111-4111-8111-111111111111',
+      pickupName: 'Costureira Maria',
+      pickupAddress: 'Rua da Costureira',
+      pickupAddressNumber: '10',
+      pickupCity: 'Marialva',
+      pickupState: 'PR',
+      pickupItem: 'Buscar jalecos',
+      pickupLatitude: -23.7,
+      pickupLongitude: -51.8,
+      pickupLocationConfirmed: true,
+      deliveryName: 'Barracão VM',
+      deliveryAddress: 'Rua do Barracão',
+      deliveryAddressNumber: '20',
+      deliveryCity: 'São Pedro do Ivaí',
+      deliveryState: 'PR',
+      deliveryItem: 'Levar jalecos',
+      deliveryLatitude: -23.8,
+      deliveryLongitude: -51.9,
+      deliveryLocationConfirmed: true,
+    });
+
+    assert.equal(result.orders.length, 2);
+    assert.equal(
+      harness.created[0]?.assignedVehicleId,
+      '11111111-1111-4111-8111-111111111111',
+    );
+    assert.equal(
+      harness.created[1]?.assignedVehicleId,
+      '11111111-1111-4111-8111-111111111111',
+    );
   });
 
   it('recusa missão sem confirmação do ponto exato', async () => {
@@ -189,5 +231,69 @@ describe('OrdersService.complete', () => {
       () => service.complete(user, 'order-2'),
       /Conclua a coleta antes de marcar a entrega/,
     );
+  });
+});
+
+describe('OrdersService.assignMissionVehicle', () => {
+  it('designa o mesmo veículo para todas as paradas disponíveis da missão', async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const auditActions: string[] = [];
+    const orders = [
+      { id: 'pickup-1', status: 'READY', assignedVehicleId: null },
+      { id: 'delivery-1', status: 'READY', assignedVehicleId: null },
+    ];
+    const transaction = {
+      serviceOrder: {
+        updateMany: async ({ data }: { data: Record<string, unknown> }) => {
+          updates.push(data);
+          return { count: orders.length };
+        },
+      },
+      auditLog: {
+        create: async ({ data }: { data: { action: string } }) => {
+          auditActions.push(data.action);
+          return { id: 'audit-1' };
+        },
+      },
+    };
+    const prisma = {
+      serviceOrder: {
+        findMany: async ({ select }: { select?: Record<string, boolean> }) =>
+          select?.status
+            ? orders
+            : orders.map((order) => ({
+                ...order,
+                type: order.id.startsWith('pickup') ? 'PICKUP' : 'DELIVERY',
+                assignedVehicle: {
+                  id: 'vehicle-2',
+                  name: 'Van 02',
+                  plate: 'VMR2B02',
+                  status: 'AVAILABLE',
+                  active: true,
+                },
+              })),
+      },
+      vehicle: {
+        findFirst: async () => ({
+          id: 'vehicle-2',
+          name: 'Van 02',
+          plate: 'VMR2B02',
+          status: 'AVAILABLE',
+          active: true,
+        }),
+      },
+      $transaction: async <T>(callback: (client: typeof transaction) => Promise<T>) =>
+        callback(transaction),
+    } as unknown as PrismaService;
+    const maps = { geocode: async () => null } as unknown as MapsService;
+    const service = new OrdersService(prisma, maps);
+
+    const result = await service.assignMissionVehicle(user, 'MIS-TEST', {
+      assignedVehicleId: '22222222-2222-4222-8222-222222222222',
+    });
+
+    assert.equal(updates[0]?.assignedVehicleId, 'vehicle-2');
+    assert.equal(auditActions[0], 'MISSION_VEHICLE_ASSIGNED');
+    assert.equal(result.assignedVehicle?.name, 'Van 02');
   });
 });

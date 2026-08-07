@@ -11,12 +11,13 @@ import {
 } from '@/components/precise-location-picker';
 import { StatusBadge } from '@/components/status-badge';
 import { api, ApiError, queryString } from '@/lib/api';
-import { formatTime, todayDateInput } from '@/lib/format';
-import type { AddressSuggestion, OrderPriority, OrderStatus, ServiceOrder } from '@/lib/types';
+import { formatDuration, formatTime, todayDateInput } from '@/lib/format';
+import type { AddressSuggestion, OrderPriority, OrderStatus, ServiceOrder, Vehicle } from '@/lib/types';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 
 interface MissionForm {
   priority: OrderPriority;
+  assignedVehicleId: string;
   hasPickup: boolean;
   pickupName: string;
   pickupAddress: string;
@@ -58,12 +59,26 @@ interface MissionView {
   priority: OrderPriority;
   status: OrderStatus;
   bundled: boolean;
+  assignedVehicleId?: string;
+  assignedVehicle?: NonNullable<ServiceOrder['assignedVehicle']>;
+}
+
+interface CreateMissionResponse {
+  reference: string;
+  orders: ServiceOrder[];
+}
+
+interface AutomaticUrgencyResponse {
+  selectedVehicle: { id: string; name: string; plate: string };
+  estimatedAddedDurationSeconds: number;
+  warnings?: string[];
 }
 
 type MissionTab = 'AVAILABLE' | 'COMPLETED' | 'CANCELLED';
 
 const initialForm: MissionForm = {
   priority: 'NORMAL',
+  assignedVehicleId: '',
   hasPickup: true,
   pickupName: '',
   pickupAddress: '',
@@ -130,15 +145,35 @@ function groupMissions(orders: ServiceOrder[]): MissionView[] {
     groups.set(key, [...(groups.get(key) ?? []), order]);
   }
 
-  return [...groups.entries()].map(([reference, groupedOrders]) => ({
-    reference,
-    orders: groupedOrders,
-    pickup: groupedOrders.find((order) => order.type === 'PICKUP'),
-    delivery: groupedOrders.find((order) => order.type === 'DELIVERY'),
-    priority: groupedOrders[0]?.priority ?? 'NORMAL',
-    status: missionStatus(groupedOrders),
-    bundled: reference.startsWith('MIS-'),
-  }));
+  return [...groups.entries()].map(([reference, groupedOrders]) => {
+    const orderWithVehicle = groupedOrders.find((order) => order.assignedVehicleId);
+
+    return {
+      reference,
+      orders: groupedOrders,
+      pickup: groupedOrders.find((order) => order.type === 'PICKUP'),
+      delivery: groupedOrders.find((order) => order.type === 'DELIVERY'),
+      priority: groupedOrders[0]?.priority ?? 'NORMAL',
+      status: missionStatus(groupedOrders),
+      bundled: reference.startsWith('MIS-'),
+      assignedVehicleId: orderWithVehicle?.assignedVehicleId ?? undefined,
+      assignedVehicle: orderWithVehicle?.assignedVehicle ?? undefined,
+    };
+  });
+}
+
+function vehicleStatusLabel(vehicle: Pick<Vehicle, 'active' | 'status'>): string {
+  if (!vehicle.active) return 'Indisponível';
+  return {
+    AVAILABLE: 'Disponível',
+    IN_ROUTE: 'Em rota',
+    MAINTENANCE: 'Manutenção',
+    INACTIVE: 'Ocupado',
+  }[vehicle.status];
+}
+
+function vehicleOptionDisabled(vehicle: Pick<Vehicle, 'active' | 'status'>): boolean {
+  return !vehicle.active || vehicle.status === 'MAINTENANCE';
 }
 
 function missionTimeValue(mission: MissionView): number {
@@ -158,7 +193,7 @@ function missionCreatedValue(mission: MissionView): number {
 
 function missionUpdatedValue(mission: MissionView): number {
   const values = mission.orders
-    .map((order) => new Date(order.updatedAt).getTime())
+    .map((order) => new Date(order.completedAt ?? order.updatedAt).getTime())
     .filter(Number.isFinite);
   return values.length > 0 ? Math.max(...values) : 0;
 }
@@ -175,11 +210,7 @@ function sortAvailableMissions(left: MissionView, right: MissionView): number {
 
 function completionTimeLabel(mission: MissionView): string {
   const timestamp = missionUpdatedValue(mission);
-  if (!timestamp) return '';
-  return new Intl.DateTimeFormat('pt-BR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(timestamp));
+  return timestamp ? formatTime(new Date(timestamp).toISOString()) : '';
 }
 
 function missionItem(order?: ServiceOrder): string {
@@ -259,6 +290,7 @@ function MissionStop({
     .join(' • ');
   const completed = order.status === 'COMPLETED';
   const completedLabel = type === 'pickup' ? 'Coletado' : 'Entregue';
+  const completedAt = completed ? formatTime(order.completedAt ?? order.updatedAt) : '';
   const actionLabel = type === 'pickup' ? 'Marcar como coletado' : 'Marcar como entregue';
 
   return (
@@ -266,7 +298,7 @@ function MissionStop({
       <div className="mission-stop-kicker">
         <span><Icon name={completed ? 'check' : type === 'pickup' ? 'pin' : 'routes'} /></span>
         {type === 'pickup' ? 'Coleta' : 'Entrega'}
-        {completed ? <strong className="mission-stop-done-label">{completedLabel}</strong> : null}
+        {completed ? <strong className="mission-stop-done-label">{completedLabel} às {completedAt}</strong> : null}
       </div>
       <h3>{order.recipientName}</h3>
       <p className="mission-stop-item">{missionItem(order)}</p>
@@ -289,7 +321,7 @@ function MissionStop({
         </a>
       </div>
       {completed ? (
-        <div className="mission-stop-completed"><Icon name="check" />{completedLabel}</div>
+        <div className="mission-stop-completed"><Icon name="check" />{completedLabel} às {completedAt}</div>
       ) : canComplete ? (
         <button
           className="button button-primary button-small mission-complete-button"
@@ -311,6 +343,7 @@ export default function OrdersPage() {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<MissionTab>('AVAILABLE');
   const [orders, setOrders] = useState<ServiceOrder[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -318,6 +351,7 @@ export default function OrdersPage() {
   const [form, setForm] = useState<MissionForm>({ ...initialForm });
   const [saving, setSaving] = useState(false);
   const [completingId, setCompletingId] = useState<string | null>(null);
+  const [assigningReference, setAssigningReference] = useState<string | null>(null);
   const canManage = Boolean(user && ['OWNER', 'ADMIN', 'DISPATCHER'].includes(user.role));
   const canComplete = Boolean(user && ['OWNER', 'ADMIN', 'DISPATCHER', 'DRIVER'].includes(user.role));
 
@@ -340,6 +374,19 @@ export default function OrdersPage() {
       setLoading(false);
     }
   }, [date, search]);
+
+  const loadVehicles = useCallback(async () => {
+    if (!canManage) return;
+    try {
+      setVehicles(await api<Vehicle[]>('/vehicles'));
+    } catch {
+      setVehicles([]);
+    }
+  }, [canManage]);
+
+  useEffect(() => {
+    void loadVehicles();
+  }, [loadVehicles]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 180);
@@ -492,11 +539,12 @@ export default function OrdersPage() {
     setError('');
     setSuccess('');
     try {
-      await api('/orders/missions', {
+      const created = await api<CreateMissionResponse>('/orders/missions', {
         method: 'POST',
         body: JSON.stringify({
           plannedDate: date,
           priority: form.priority,
+          assignedVehicleId: form.assignedVehicleId || undefined,
           ...(form.hasPickup
             ? {
                 pickupName: form.pickupName,
@@ -536,15 +584,60 @@ export default function OrdersPage() {
           notes: form.notes || undefined,
         }),
       });
+      let successMessage = 'Missão cadastrada e pronta para entrar na rota.';
+      const urgentOrder = created.orders[0];
+
+      if (form.priority === 'URGENT' && urgentOrder) {
+        try {
+          const recalculated = await api<AutomaticUrgencyResponse>('/routes/recalculate-urgent', {
+            method: 'POST',
+            body: JSON.stringify({ urgentOrderId: urgentOrder.id }),
+          });
+          successMessage = `Urgência incluída automaticamente na rota de ${recalculated.selectedVehicle.name} (${recalculated.selectedVehicle.plate}). Acréscimo estimado: ${formatDuration(recalculated.estimatedAddedDurationSeconds)}.`;
+        } catch (urgencyError) {
+          const reason = urgencyError instanceof ApiError
+            ? urgencyError.message
+            : 'A rota ainda não pôde ser recalculada.';
+          successMessage = `Missão urgente cadastrada. ${reason}`;
+        }
+      }
+
       setForm({ ...initialForm });
       setFormOpen(false);
       setActiveTab('AVAILABLE');
-      setSuccess('Missão cadastrada e pronta para entrar na rota.');
+      setSuccess(successMessage);
       await load();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível cadastrar a missão.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function assignMissionVehicle(mission: MissionView, assignedVehicleId: string) {
+    setAssigningReference(mission.reference);
+    setError('');
+    setSuccess('');
+    try {
+      await api(`/orders/missions/${encodeURIComponent(mission.reference)}/vehicle`, {
+        method: 'PATCH',
+        body: JSON.stringify({ assignedVehicleId: assignedVehicleId || null }),
+      });
+      const vehicle = vehicles.find((item) => item.id === assignedVehicleId);
+      setSuccess(
+        vehicle
+          ? `Missão ${mission.reference} designada para ${vehicle.name}.`
+          : `Missão ${mission.reference} voltou para a escolha automática.`,
+      );
+      await load();
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError
+          ? caught.message
+          : 'Não foi possível alterar o veículo da missão.',
+      );
+    } finally {
+      setAssigningReference(null);
     }
   }
 
@@ -657,6 +750,9 @@ export default function OrdersPage() {
             const pickupCompleted = mission.pickup?.status === 'COMPLETED';
             const deliveryBlocked = Boolean(mission.pickup && mission.delivery && !pickupCompleted);
             const completedAt = mission.status === 'COMPLETED' ? completionTimeLabel(mission) : '';
+            const assignmentEditable = mission.orders.every((order) =>
+              ['PLANNED', 'READY'].includes(order.status),
+            );
 
             return (
               <article className={`mission-card priority-${mission.priority.toLowerCase()}${mission.status === 'COMPLETED' ? ' is-completed' : ''}`} key={mission.reference}>
@@ -695,6 +791,51 @@ export default function OrdersPage() {
                   ) : null}
                 </div>
 
+                <div className="mission-vehicle-assignment">
+                  <div className="mission-vehicle-current">
+                    <span className="mission-vehicle-icon"><Icon name="vehicles" /></span>
+                    <span>
+                      <small>Veículo da missão</small>
+                      <strong>
+                        {mission.assignedVehicle
+                          ? `${mission.assignedVehicle.name} • ${mission.assignedVehicle.plate}`
+                          : 'Automático na roteirização'}
+                      </strong>
+                    </span>
+                  </div>
+                  {canManage && activeTab === 'AVAILABLE' && assignmentEditable ? (
+                    <label className="mission-vehicle-select">
+                      <span>Designar</span>
+                      <select
+                        value={mission.assignedVehicleId ?? ''}
+                        disabled={assigningReference === mission.reference}
+                        onChange={(event) =>
+                          void assignMissionVehicle(mission, event.target.value)
+                        }
+                      >
+                        <option value="">Automático — sistema escolhe</option>
+                        {mission.assignedVehicleId &&
+                        !vehicles.some((vehicle) => vehicle.id === mission.assignedVehicleId) ? (
+                          <option value={mission.assignedVehicleId}>Veículo atual não disponível</option>
+                        ) : null}
+                        {vehicles.map((vehicle) => (
+                          <option
+                            key={vehicle.id}
+                            value={vehicle.id}
+                            disabled={vehicleOptionDisabled(vehicle)}
+                          >
+                            {vehicle.name} ({vehicle.plate}) — {vehicleStatusLabel(vehicle)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : mission.assignedVehicle ? (
+                    <span className="mission-vehicle-locked">
+                      {assignmentEditable ? vehicleStatusLabel(mission.assignedVehicle) : 'Definido antes da rota'}
+                    </span>
+                  ) : null}
+                </div>
+
                 {canManage && activeTab === 'AVAILABLE' && !['IN_PROGRESS', 'COMPLETED', 'CANCELLED'].includes(mission.status) ? (
                   <footer className="mission-card-footer">
                     <button className="button button-ghost button-small danger-text" onClick={() => void cancelMission(mission)}>Cancelar missão</button>
@@ -729,6 +870,33 @@ export default function OrdersPage() {
               ))}
             </div>
           </fieldset>
+
+          <label className="field mission-vehicle-field">
+            <span>Veículo <small>(opcional)</small></span>
+            <select
+              value={form.assignedVehicleId}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  assignedVehicleId: event.target.value,
+                }))
+              }
+            >
+              <option value="">Automático — o sistema escolhe na roteirização</option>
+              {vehicles.map((vehicle) => (
+                <option
+                  key={vehicle.id}
+                  value={vehicle.id}
+                  disabled={vehicleOptionDisabled(vehicle)}
+                >
+                  {vehicle.name} ({vehicle.plate}) — {vehicleStatusLabel(vehicle)}
+                </option>
+              ))}
+            </select>
+            <small className="mission-vehicle-help">
+              Escolha Fiorino ou Van para fixar a missão nesse veículo. Sem escolha, o sistema decide pela melhor rota.
+            </small>
+          </label>
 
           <div className="form-hint"><Icon name="check" />Use somente coleta, somente entrega ou as duas na mesma missão.</div>
 

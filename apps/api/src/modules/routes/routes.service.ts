@@ -7,6 +7,7 @@ import type { AuthUser } from '../../common/types/auth-user';
 import { formatDateOnly, parseDateOnly } from '../../common/utils/date.utils';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import type { AutoRecalculateUrgencyDto } from './dto/auto-recalculate-urgency.dto';
 import type { ListRoutesQueryDto } from './dto/list-routes-query.dto';
 import type { OptimizeRoutesDto } from './dto/optimize-routes.dto';
 import type { RecalculateRouteDto } from './dto/recalculate-route.dto';
@@ -43,7 +44,18 @@ export class RoutesService {
           orderBy: { sequence: 'asc' },
           include: {
             serviceOrder: {
-              select: { id: true, code: true, priority: true, type: true, recipientPhone: true },
+              select: {
+                id: true,
+                code: true,
+                externalReference: true,
+                priority: true,
+                type: true,
+                status: true,
+                recipientName: true,
+                recipientPhone: true,
+                timeWindowStart: true,
+                timeWindowEnd: true,
+              },
             },
           },
         },
@@ -114,13 +126,31 @@ export class RoutesService {
       },
       orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
     });
+    const assignmentUnavailableOrders = candidateOrders.filter(
+      (order) =>
+        order.assignedVehicleId != null &&
+        !selectedVehicleIds.includes(order.assignedVehicleId),
+    );
+    const assignmentUnavailableIds = new Set(
+      assignmentUnavailableOrders.map((order) => order.id),
+    );
     const missingCoordinates = candidateOrders.filter(
-      (order) => order.latitude == null || order.longitude == null,
+      (order) =>
+        !assignmentUnavailableIds.has(order.id) &&
+        (order.latitude == null || order.longitude == null),
     );
     const eligibleOrders = candidateOrders.filter(
-      (order) => order.latitude != null && order.longitude != null,
+      (order) =>
+        !assignmentUnavailableIds.has(order.id) &&
+        order.latitude != null &&
+        order.longitude != null,
     );
     if (eligibleOrders.length === 0) {
+      if (assignmentUnavailableOrders.length > 0) {
+        throw new BadRequestException(
+          'As missões estão designadas a veículos que não estão disponíveis para esta roteirização.',
+        );
+      }
       throw new BadRequestException(
         'Nenhuma ordem pronta e georreferenciada foi encontrada para esta data.',
       );
@@ -139,6 +169,12 @@ export class RoutesService {
           depotId: depot.id,
           orderIds: eligibleOrders.map((order) => order.id),
           vehicleIds: vehicles.map((vehicle) => vehicle.id),
+          assignments: eligibleOrders
+            .filter((order) => order.assignedVehicleId)
+            .map((order) => ({
+              orderId: order.id,
+              assignedVehicleId: order.assignedVehicleId,
+            })),
           requestedProvider: requestedProvider ?? 'environment-default',
         }),
       },
@@ -154,6 +190,7 @@ export class RoutesService {
       const allSkippedOrderIds = [
         ...new Set([
           ...missingCoordinates.map((order) => order.id),
+          ...assignmentUnavailableOrders.map((order) => order.id),
           ...result.skippedOrderIds,
         ]),
       ];
@@ -171,6 +208,11 @@ export class RoutesService {
       if (missingCoordinates.length > 0) {
         warnings.push(
           `${missingCoordinates.length} ordem(ns) ficaram fora por não possuírem latitude e longitude.`,
+        );
+      }
+      if (assignmentUnavailableOrders.length > 0) {
+        warnings.push(
+          `${assignmentUnavailableOrders.length} parada(s) ficaram pendentes porque o veículo designado não estava disponível.`,
         );
       }
 
@@ -226,10 +268,22 @@ export class RoutesService {
     const recalculationProvider =
       dto.provider ?? (route.provider === 'GOOGLE' ? 'google' : 'local');
 
+    // Se o motorista já está a caminho ou chegou a uma parada, essa parada fica
+    // travada. Sem GPS em tempo real, reorganizá-la no meio do deslocamento seria
+    // confuso; o recálculo começa a partir dela e altera somente o que vem depois.
+    const lockedActiveStop = !hasLatitude
+      ? route.stops.find(
+          (stop) =>
+            stop.type === 'SERVICE' &&
+            ['EN_ROUTE', 'ARRIVED'].includes(stop.status) &&
+            stop.serviceOrder,
+        )
+      : undefined;
     const remainingOrders = route.stops
       .filter(
         (stop) =>
           stop.type === 'SERVICE' &&
+          stop.id !== lockedActiveStop?.id &&
           !FINISHED_STOP_STATUSES.includes(
             stop.status as (typeof FINISHED_STOP_STATUSES)[number],
           ) &&
@@ -266,6 +320,21 @@ export class RoutesService {
       if (urgentOrders.some((order) => order.latitude == null || order.longitude == null)) {
         throw new BadRequestException('A missão urgente ainda possui local sem coordenadas.');
       }
+      const designatedVehicleIds = [
+        ...new Set(
+          urgentOrders
+            .map((order) => order.assignedVehicleId)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ];
+      if (designatedVehicleIds.length > 1) {
+        throw new BadRequestException('A missão possui designações de veículo inconsistentes.');
+      }
+      if (designatedVehicleIds[0] && designatedVehicleIds[0] !== route.vehicleId) {
+        throw new BadRequestException(
+          'Esta urgência foi designada a outro veículo e não pode entrar nesta rota.',
+        );
+      }
       for (const urgent of urgentOrders) {
         if (!remainingOrders.some((order) => order.id === urgent.id)) {
           remainingOrders.push(urgent);
@@ -290,22 +359,32 @@ export class RoutesService {
             latitude: dto.currentLatitude!,
             longitude: dto.currentLongitude!,
           }
-        : lastCompleted
+        : lockedActiveStop
           ? {
-              label: lastCompleted.label,
-              address: lastCompleted.address,
-              latitude: Number(lastCompleted.latitude),
-              longitude: Number(lastCompleted.longitude),
+              label: lockedActiveStop.label,
+              address: lockedActiveStop.address,
+              latitude: Number(lockedActiveStop.latitude),
+              longitude: Number(lockedActiveStop.longitude),
             }
-          : {
-              label: route.depot.name,
-              address: route.depot.addressLine,
-              latitude: Number(route.depot.latitude),
-              longitude: Number(route.depot.longitude),
-            };
+          : lastCompleted
+            ? {
+                label: lastCompleted.label,
+                address: lastCompleted.address,
+                latitude: Number(lastCompleted.latitude),
+                longitude: Number(lastCompleted.longitude),
+              }
+            : {
+                label: route.depot.name,
+                address: route.depot.addressLine,
+                latitude: Number(route.depot.latitude),
+                longitude: Number(route.depot.longitude),
+              };
 
     const context: OptimizationContext = {
       routeDate: route.routeDate,
+      startAt: hasLatitude
+        ? new Date()
+        : this.recalculationStartAt(lockedActiveStop, route.status),
       startLocation,
       endLocation: {
         label: route.depot.name,
@@ -346,6 +425,7 @@ export class RoutesService {
             routePlanId: route.id,
             type: { not: 'DEPOT_START' },
             status: { notIn: [...FINISHED_STOP_STATUSES] },
+            ...(lockedActiveStop ? { id: { not: lockedActiveStop.id } } : {}),
           },
         });
         const lastSequence = await transaction.routeStop.aggregate({
@@ -446,6 +526,212 @@ export class RoutesService {
     }
   }
 
+  async recalculateUrgency(user: AuthUser, dto: AutoRecalculateUrgencyDto) {
+    const selectedUrgent = await this.prisma.serviceOrder.findFirst({
+      where: {
+        id: dto.urgentOrderId,
+        organizationId: user.organizationId,
+        status: { in: ['PLANNED', 'READY'] },
+      },
+      include: { customer: true },
+    });
+
+    if (!selectedUrgent) {
+      throw new BadRequestException('A missão urgente informada não está disponível.');
+    }
+    if (selectedUrgent.priority !== 'URGENT') {
+      throw new BadRequestException('Selecione uma missão marcada como urgente.');
+    }
+
+    const urgentOrders = selectedUrgent.externalReference?.startsWith('MIS-')
+      ? await this.prisma.serviceOrder.findMany({
+          where: {
+            organizationId: user.organizationId,
+            externalReference: selectedUrgent.externalReference,
+            status: { in: ['PLANNED', 'READY'] },
+          },
+          include: { customer: true },
+        })
+      : [selectedUrgent];
+
+    if (urgentOrders.some((order) => order.latitude == null || order.longitude == null)) {
+      throw new BadRequestException('A missão urgente ainda possui local sem coordenadas.');
+    }
+
+    const designatedVehicleIds = [
+      ...new Set(
+        urgentOrders
+          .map((order) => order.assignedVehicleId)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ];
+    if (designatedVehicleIds.length > 1) {
+      throw new BadRequestException('A missão possui designações de veículo inconsistentes.');
+    }
+    const designatedVehicleId = designatedVehicleIds[0];
+
+    const activeRoutes = await this.prisma.routePlan.findMany({
+      where: {
+        organizationId: user.organizationId,
+        routeDate: selectedUrgent.plannedDate,
+        status: { in: ['OPTIMIZED', 'IN_PROGRESS'] },
+      },
+      include: {
+        depot: true,
+        vehicle: true,
+        stops: {
+          orderBy: { sequence: 'asc' },
+          include: { serviceOrder: { include: { customer: true } } },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (activeRoutes.length === 0) {
+      throw new BadRequestException(
+        'Ainda não existem rotas ativas para este dia. Gere as rotas antes de inserir a urgência.',
+      );
+    }
+
+    const routesToEvaluate = designatedVehicleId
+      ? activeRoutes.filter((route) => route.vehicleId === designatedVehicleId)
+      : activeRoutes;
+
+    if (routesToEvaluate.length === 0) {
+      throw new BadRequestException(
+        'O veículo designado para a urgência não possui uma rota ativa neste dia.',
+      );
+    }
+
+    let best:
+      | {
+          routeId: string;
+          vehicleId: string;
+          vehicleName: string;
+          vehiclePlate: string;
+          addedDurationSeconds: number;
+          score: number;
+        }
+      | undefined;
+
+    for (const route of routesToEvaluate) {
+      const lockedActiveStop = route.stops.find(
+        (stop) =>
+          stop.type === 'SERVICE' &&
+          ['EN_ROUTE', 'ARRIVED'].includes(stop.status) &&
+          stop.serviceOrder,
+      );
+      const pendingStops = route.stops.filter(
+        (stop) =>
+          stop.type === 'SERVICE' &&
+          stop.id !== lockedActiveStop?.id &&
+          !FINISHED_STOP_STATUSES.includes(
+            stop.status as (typeof FINISHED_STOP_STATUSES)[number],
+          ) &&
+          stop.serviceOrder,
+      );
+      const remainingOrders = pendingStops.map((stop) => stop.serviceOrder!);
+
+      for (const urgent of urgentOrders) {
+        if (!remainingOrders.some((order) => order.id === urgent.id)) {
+          remainingOrders.push(urgent);
+        }
+      }
+
+      const lastFinished = [...route.stops]
+        .reverse()
+        .find((stop) =>
+          FINISHED_STOP_STATUSES.includes(
+            stop.status as (typeof FINISHED_STOP_STATUSES)[number],
+          ),
+        );
+      const startAnchor = lockedActiveStop ?? lastFinished;
+      const startLocation = startAnchor
+        ? {
+            label: startAnchor.label,
+            address: startAnchor.address,
+            latitude: Number(startAnchor.latitude),
+            longitude: Number(startAnchor.longitude),
+          }
+        : {
+            label: route.depot.name,
+            address: route.depot.addressLine,
+            latitude: Number(route.depot.latitude),
+            longitude: Number(route.depot.longitude),
+          };
+      const context: OptimizationContext = {
+        routeDate: route.routeDate,
+        startAt: this.recalculationStartAt(lockedActiveStop, route.status),
+        startLocation,
+        endLocation: {
+          label: route.depot.name,
+          address: route.depot.addressLine,
+          latitude: Number(route.depot.latitude),
+          longitude: Number(route.depot.longitude),
+        },
+        orders: remainingOrders.map((order) => this.mapOrder(order)),
+        vehicles: [this.mapVehicle(route.vehicle)],
+      };
+
+      const candidateResult = await this.optimizer.optimize(context, 'local');
+      const candidate = candidateResult.routes[0];
+      if (!candidate) continue;
+
+      const currentRemainingSeconds =
+        pendingStops.reduce(
+          (total, stop) =>
+            total +
+            stop.durationFromPreviousSec +
+            (stop.serviceOrder?.serviceDurationMin ?? 0) * 60,
+          0,
+        ) +
+        (route.stops.find(
+          (stop) =>
+            stop.type === 'DEPOT_END' &&
+            !FINISHED_STOP_STATUSES.includes(
+              stop.status as (typeof FINISHED_STOP_STATUSES)[number],
+            ),
+        )?.durationFromPreviousSec ?? 0);
+      const addedDurationSeconds = Math.max(
+        0,
+        candidate.totalDurationSeconds - currentRemainingSeconds,
+      );
+      const score = addedDurationSeconds + candidate.totalDurationSeconds * 0.02;
+
+      if (!best || score < best.score) {
+        best = {
+          routeId: route.id,
+          vehicleId: route.vehicle.id,
+          vehicleName: route.vehicle.name,
+          vehiclePlate: route.vehicle.plate,
+          addedDurationSeconds,
+          score,
+        };
+      }
+    }
+
+    if (!best) {
+      throw new BadRequestException(
+        'Não foi possível encontrar um veículo disponível para a urgência.',
+      );
+    }
+
+    const recalculated = await this.recalculate(user, best.routeId, {
+      urgentOrderId: dto.urgentOrderId,
+      provider: 'local',
+    });
+
+    return {
+      ...recalculated,
+      selectedVehicle: {
+        id: best.vehicleId,
+        name: best.vehicleName,
+        plate: best.vehiclePlate,
+      },
+      estimatedAddedDurationSeconds: best.addedDurationSeconds,
+    };
+  }
+
   async updateStopStatus(
     user: AuthUser,
     routeId: string,
@@ -499,6 +785,28 @@ export class RoutesService {
           where: { id: stop.serviceOrderId },
           data: { status: orderStatus },
         });
+
+        if (dto.status === 'COMPLETED' && stop.serviceOrder) {
+          await transaction.auditLog.create({
+            data: {
+              organizationId: user.organizationId,
+              userId: user.sub,
+              action:
+                stop.serviceOrder.type === 'PICKUP'
+                  ? 'MISSION_PICKUP_COMPLETED'
+                  : 'MISSION_DELIVERY_COMPLETED',
+              entityType: 'ServiceOrder',
+              entityId: stop.serviceOrder.id,
+              metadata: {
+                code: stop.serviceOrder.code,
+                reference: stop.serviceOrder.externalReference,
+                type: stop.serviceOrder.type,
+                routeStopId: stop.id,
+                routeId,
+              },
+            },
+          });
+        }
       }
 
       if (dto.status === 'EN_ROUTE' || dto.status === 'ARRIVED') {
@@ -547,6 +855,17 @@ export class RoutesService {
     return this.findOne(user, routeId);
   }
 
+  private recalculationStartAt(
+    lockedStop: { plannedDepartureAt: Date | null } | undefined,
+    routeStatus: string,
+  ): Date | undefined {
+    const now = Date.now();
+    if (lockedStop?.plannedDepartureAt) {
+      return new Date(Math.max(now, lockedStop.plannedDepartureAt.getTime()));
+    }
+    return lockedStop || routeStatus === 'IN_PROGRESS' ? new Date(now) : undefined;
+  }
+
   private async findDepot(organizationId: string, depotId?: string) {
     const depot = await this.prisma.depot.findFirst({
       where: {
@@ -589,6 +908,7 @@ export class RoutesService {
     id: string;
     code: string;
     externalReference: string | null;
+    assignedVehicleId: string | null;
     recipientName: string;
     formattedAddress: string | null;
     addressLine: string;
@@ -611,6 +931,7 @@ export class RoutesService {
       missionId: order.externalReference?.startsWith('MIS-')
         ? order.externalReference
         : undefined,
+      assignedVehicleId: order.assignedVehicleId ?? undefined,
       label: `${order.type === 'PICKUP' ? 'Coletar em' : 'Entregar em'} ${order.recipientName}`,
       address: order.formattedAddress ?? `${order.addressLine}, ${order.city} - ${order.state}`,
       type: order.type,

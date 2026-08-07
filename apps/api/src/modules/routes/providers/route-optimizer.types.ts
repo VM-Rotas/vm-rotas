@@ -9,6 +9,7 @@ export interface OptimizableOrder extends GeoPoint {
   id: string;
   code: string;
   missionId?: string;
+  assignedVehicleId?: string;
   label: string;
   address: string;
   type: 'DELIVERY' | 'PICKUP';
@@ -32,6 +33,8 @@ export interface OptimizableVehicle {
 
 export interface OptimizationContext {
   routeDate: Date;
+  /** Momento real a partir do qual o trecho deve ser planejado (usado em recálculos). */
+  startAt?: Date;
   startLocation: GeoPoint & { label: string; address: string };
   endLocation: GeoPoint & { label: string; address: string };
   orders: OptimizableOrder[];

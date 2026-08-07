@@ -773,6 +773,52 @@ h1, h2, h3, p { margin-top: 0; }
 .mission-navigation-actions .button { flex: 1 1 auto; min-width: 105px; }
 .mission-card-footer { display: flex; justify-content: flex-end; padding: .65rem 1rem; border-top: 1px solid var(--line); background: #fbfcfc; }
 
+.mission-vehicle-assignment {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .8rem;
+  padding: .72rem 1rem;
+  border-top: 1px solid var(--line);
+  background: #f8fbfa;
+}
+.mission-vehicle-current { min-width: 0; display: flex; align-items: center; gap: .58rem; }
+.mission-vehicle-current > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: .08rem; }
+.mission-vehicle-current small,
+.mission-vehicle-select > span { color: var(--muted); font-size: .64rem; font-weight: 720; }
+.mission-vehicle-current strong { overflow: hidden; font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.mission-vehicle-icon {
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--primary);
+  background: var(--primary-light);
+}
+.mission-vehicle-icon svg { width: 17px; height: 17px; }
+.mission-vehicle-select { display: flex; align-items: center; gap: .45rem; }
+.mission-vehicle-select select {
+  min-width: 220px;
+  min-height: 38px;
+  padding: .42rem 2rem .42rem .62rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+  font-size: .72rem;
+}
+.mission-vehicle-locked { color: var(--muted); font-size: .67rem; font-weight: 720; }
+.mission-vehicle-field {
+  padding: .8rem;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #f8fbfa;
+}
+.mission-vehicle-help { display: block; margin-top: .35rem; color: var(--muted); font-size: .68rem; line-height: 1.4; }
+
 .mission-list-toolbar {
   display: flex;
   align-items: center;
@@ -900,6 +946,9 @@ h1, h2, h3, p { margin-top: 0; }
   .mission-card-flow.has-two-stops { grid-template-columns: 1fr; }
   .mission-flow-arrow { transform: rotate(90deg); min-height: 18px; }
   .mission-card-title h2 { white-space: normal; }
+  .mission-vehicle-assignment { align-items: stretch; flex-direction: column; }
+  .mission-vehicle-select { align-items: stretch; flex-direction: column; }
+  .mission-vehicle-select select { width: 100%; min-width: 0; }
 }
 
 /* Confirmação do ponto exato do GPS */

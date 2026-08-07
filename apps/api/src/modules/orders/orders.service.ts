@@ -9,6 +9,7 @@ import { parseDateOnly } from '../../common/utils/date.utils';
 import { Prisma, type ServiceOrder } from '../../generated/prisma/client';
 import { MapsService } from '../maps/maps.service';
 import { PrismaService } from '../prisma/prisma.service';
+import type { AssignMissionVehicleDto } from './dto/assign-mission-vehicle.dto';
 import type { CreateMissionDto } from './dto/create-mission.dto';
 import type { CreateOrderDto } from './dto/create-order.dto';
 import type { ListOrdersQueryDto } from './dto/list-orders-query.dto';
@@ -62,7 +63,12 @@ export class OrdersService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.serviceOrder.findMany({
         where,
-        include: { customer: true },
+        include: {
+          customer: true,
+          assignedVehicle: {
+            select: { id: true, name: true, plate: true, status: true, active: true },
+          },
+        },
         orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
         take: query.take,
         skip: query.skip,
@@ -70,7 +76,32 @@ export class OrdersService {
       this.prisma.serviceOrder.count({ where }),
     ]);
 
-    return { items, total };
+    const completionLogs = items.length > 0
+      ? await this.prisma.auditLog.findMany({
+          where: {
+            organizationId: user.organizationId,
+            entityType: 'ServiceOrder',
+            entityId: { in: items.map((item) => item.id) },
+            action: { in: ['MISSION_PICKUP_COMPLETED', 'MISSION_DELIVERY_COMPLETED'] },
+          },
+          select: { entityId: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+        })
+      : [];
+    const completedAtByOrder = new Map<string, Date>();
+    for (const log of completionLogs) {
+      if (log.entityId && !completedAtByOrder.has(log.entityId)) {
+        completedAtByOrder.set(log.entityId, log.createdAt);
+      }
+    }
+
+    return {
+      items: items.map((item) => ({
+        ...item,
+        completedAt: completedAtByOrder.get(item.id) ?? null,
+      })),
+      total,
+    };
   }
 
   async findOne(user: AuthUser, id: string) {
@@ -78,6 +109,9 @@ export class OrdersService {
       where: { id, organizationId: user.organizationId },
       include: {
         customer: true,
+        assignedVehicle: {
+          select: { id: true, name: true, plate: true, status: true, active: true },
+        },
         routeStops: {
           include: { routePlan: { include: { vehicle: true } } },
           orderBy: { createdAt: 'desc' },
@@ -88,7 +122,19 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException('Ordem não encontrada.');
     }
-    return order;
+
+    const completionLog = await this.prisma.auditLog.findFirst({
+      where: {
+        organizationId: user.organizationId,
+        entityType: 'ServiceOrder',
+        entityId: order.id,
+        action: { in: ['MISSION_PICKUP_COMPLETED', 'MISSION_DELIVERY_COMPLETED'] },
+      },
+      select: { createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return { ...order, completedAt: completionLog?.createdAt ?? null };
   }
 
   async createMission(user: AuthUser, dto: CreateMissionDto) {
@@ -130,6 +176,24 @@ export class OrdersService {
 
     if (points.length === 0) {
       throw new BadRequestException('Informe uma coleta, uma entrega ou as duas.');
+    }
+
+    const assignedVehicle = dto.assignedVehicleId
+      ? await this.prisma.vehicle.findFirst({
+          where: {
+            id: dto.assignedVehicleId,
+            organizationId: user.organizationId,
+            active: true,
+          },
+          select: { id: true, name: true, plate: true, status: true },
+        })
+      : null;
+
+    if (dto.assignedVehicleId && !assignedVehicle) {
+      throw new BadRequestException('O veículo escolhido não está ativo nesta organização.');
+    }
+    if (assignedVehicle?.status === 'MAINTENANCE') {
+      throw new BadRequestException('O veículo escolhido está em manutenção.');
     }
 
     const plannedDate = parseDateOnly(dto.plannedDate);
@@ -192,6 +256,7 @@ export class OrdersService {
           data: {
             organizationId: user.organizationId,
             createdById: user.sub,
+            assignedVehicleId: assignedVehicle?.id ?? null,
             code: `${reference}-${typeSuffix}`,
             externalReference: reference,
             type: point.type,
@@ -232,6 +297,8 @@ export class OrdersService {
             priority: dto.priority ?? 'NORMAL',
             orderIds: created.map((order) => order.id),
             types: created.map((order) => order.type),
+            assignedVehicleId: assignedVehicle?.id ?? null,
+            assignedVehicleName: assignedVehicle?.name ?? null,
           },
         },
       });
@@ -282,6 +349,109 @@ export class OrdersService {
       });
       return { reference: normalizedReference, cancelledStops: result.count };
     });
+  }
+
+  async assignMissionVehicle(
+    user: AuthUser,
+    reference: string,
+    dto: AssignMissionVehicleDto,
+  ) {
+    const normalizedReference = reference.trim();
+    const missionWhere: Prisma.ServiceOrderWhereInput = normalizedReference.startsWith('MIS-')
+      ? { externalReference: normalizedReference }
+      : { code: normalizedReference };
+
+    const orders = await this.prisma.serviceOrder.findMany({
+      where: {
+        organizationId: user.organizationId,
+        ...missionWhere,
+      },
+      select: {
+        id: true,
+        status: true,
+        assignedVehicleId: true,
+      },
+    });
+
+    if (orders.length === 0) {
+      throw new NotFoundException('Missão não encontrada.');
+    }
+
+    if (orders.some((order) => !['PLANNED', 'READY'].includes(order.status))) {
+      throw new BadRequestException(
+        'O veículo só pode ser alterado antes de a missão entrar em uma rota.',
+      );
+    }
+
+    const assignedVehicle = dto.assignedVehicleId
+      ? await this.prisma.vehicle.findFirst({
+          where: {
+            id: dto.assignedVehicleId,
+            organizationId: user.organizationId,
+            active: true,
+          },
+          select: { id: true, name: true, plate: true, status: true, active: true },
+        })
+      : null;
+
+    if (dto.assignedVehicleId && !assignedVehicle) {
+      throw new BadRequestException('O veículo escolhido não está ativo nesta organização.');
+    }
+    if (assignedVehicle?.status === 'MAINTENANCE') {
+      throw new BadRequestException('O veículo escolhido está em manutenção.');
+    }
+
+    const previousVehicleIds = [
+      ...new Set(
+        orders
+          .map((order) => order.assignedVehicleId)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ];
+
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.serviceOrder.updateMany({
+        where: {
+          organizationId: user.organizationId,
+          id: { in: orders.map((order) => order.id) },
+        },
+        data: { assignedVehicleId: assignedVehicle?.id ?? null },
+      });
+
+      await transaction.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          userId: user.sub,
+          action: assignedVehicle ? 'MISSION_VEHICLE_ASSIGNED' : 'MISSION_VEHICLE_CLEARED',
+          entityType: 'Mission',
+          entityId: normalizedReference,
+          metadata: {
+            reference: normalizedReference,
+            previousVehicleIds,
+            assignedVehicleId: assignedVehicle?.id ?? null,
+            assignedVehicleName: assignedVehicle?.name ?? null,
+          },
+        },
+      });
+    });
+
+    return {
+      reference: normalizedReference,
+      assignedVehicle,
+      orders: await this.prisma.serviceOrder.findMany({
+        where: {
+          organizationId: user.organizationId,
+          id: { in: orders.map((order) => order.id) },
+        },
+        include: {
+          customer: true,
+          assignedVehicle: {
+            select: { id: true, name: true, plate: true, status: true, active: true },
+          },
+        },
+        orderBy: { type: 'desc' },
+      }),
+    };
   }
 
   async create(user: AuthUser, dto: CreateOrderDto) {

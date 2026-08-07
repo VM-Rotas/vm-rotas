@@ -159,6 +159,7 @@ model Vehicle {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   routePlans       RoutePlan[]
+  assignedOrders   ServiceOrder[] @relation("AssignedVehicleOrders")
   trackingSessions TrackingSession[]
   trackingPoints   TrackingPoint[]
 
@@ -188,6 +189,7 @@ model ServiceOrder {
   organizationId     String             @db.Uuid
   customerId         String?            @db.Uuid
   createdById        String?            @db.Uuid
+  assignedVehicleId  String?            @db.Uuid
   code               String
   externalReference  String?
   type               ServiceOrderType
@@ -216,13 +218,15 @@ model ServiceOrder {
   updatedAt          DateTime           @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer     Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  createdBy    User?        @relation("OrdersCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  routeStops   RouteStop[]
+  customer        Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdBy       User?     @relation("OrdersCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedVehicle Vehicle?  @relation("AssignedVehicleOrders", fields: [assignedVehicleId], references: [id], onDelete: SetNull)
+  routeStops     RouteStop[]
 
   @@unique([organizationId, code])
   @@index([organizationId, plannedDate, status])
   @@index([organizationId, priority, status])
+  @@index([organizationId, assignedVehicleId, plannedDate, status], map: "ServiceOrder_assigned_vehicle_plan_idx")
   @@index([customerId])
 }
 

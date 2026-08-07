@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Length,
   Matches,
   Max,
@@ -19,6 +20,15 @@ export class CreateMissionDto {
   @IsString()
   @Length(10, 10)
   plannedDate: string;
+
+  @ApiPropertyOptional({
+    description: 'Veículo previamente designado. Quando omitido, o sistema escolhe automaticamente.',
+    example: '4abdb504-ef85-4f38-9c80-421c1d1cdd9e',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsUUID()
+  assignedVehicleId?: string | null;
 
   @ApiPropertyOptional({
     enum: ['LOW', 'NORMAL', 'HIGH', 'URGENT'],
