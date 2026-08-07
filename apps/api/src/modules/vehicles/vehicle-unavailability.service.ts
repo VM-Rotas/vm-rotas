@@ -256,7 +256,7 @@ export class VehicleUnavailabilityService {
         timeWindowStart: { not: null },
         ...(excludeOrderIds.length > 0 ? { id: { notIn: excludeOrderIds } } : {}),
       },
-      include: { vehicle: { select: { name: true } } },
+      include: { assignedVehicle: { select: { name: true } } },
       orderBy: { timeWindowStart: 'asc' },
     });
 
@@ -273,7 +273,7 @@ export class VehicleUnavailabilityService {
     const startsAt = conflict.timeWindowStart as Date;
     const endsAt = conflict.timeWindowEnd ?? new Date(startsAt.getTime() + 60 * 60 * 1_000);
     const reference = conflict.externalReference ?? conflict.code;
-    const vehicleName = conflict.vehicle?.name ?? 'O veículo';
+    const vehicleName = conflict.assignedVehicle?.name ?? 'O veículo';
 
     throw new BadRequestException(
       `${vehicleName} já está designado para a missão ${reference} de ${this.localTime(startsAt)} a ${this.localTime(endsAt)}. Escolha outro veículo ou outro horário.`,
