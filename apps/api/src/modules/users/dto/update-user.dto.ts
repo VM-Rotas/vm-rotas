@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export class UpdateUserDto {
   @ApiPropertyOptional()
@@ -19,6 +19,15 @@ export class UpdateUserDto {
   @IsOptional()
   @IsIn(['OWNER', 'ADMIN', 'DISPATCHER', 'DRIVER', 'VIEWER'])
   role?: 'OWNER' | 'ADMIN' | 'DISPATCHER' | 'DRIVER' | 'VIEWER';
+
+
+  @ApiPropertyOptional({
+    description: 'Veículo fixo da conta motorista. Use null para remover o vínculo.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsUUID()
+  assignedVehicleId?: string | null;
 
   @ApiPropertyOptional({ minLength: 8 })
   @IsOptional()

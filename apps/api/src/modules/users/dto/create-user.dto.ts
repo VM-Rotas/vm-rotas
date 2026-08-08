@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export class CreateUserDto {
   @ApiProperty({ example: 'Operador de Tráfego' })
@@ -21,6 +21,14 @@ export class CreateUserDto {
   @ApiProperty({ enum: ['OWNER', 'ADMIN', 'DISPATCHER', 'DRIVER', 'VIEWER'] })
   @IsIn(['OWNER', 'ADMIN', 'DISPATCHER', 'DRIVER', 'VIEWER'])
   role: 'OWNER' | 'ADMIN' | 'DISPATCHER' | 'DRIVER' | 'VIEWER';
+
+  @ApiPropertyOptional({
+    description: 'Veículo fixo da conta motorista. Somente perfis DRIVER podem receber este vínculo.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsUUID()
+  assignedVehicleId?: string | null;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()

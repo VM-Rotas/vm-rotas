@@ -61,16 +61,36 @@ const finishedStatuses = ['COMPLETED', 'FAILED', 'SKIPPED'];
 const activeRouteStatuses = ['OPTIMIZED', 'IN_PROGRESS'];
 
 function validStopCoordinates(stop: RouteStop): { latitude: number; longitude: number } | null {
+  const orderLatitude = Number(stop.serviceOrder?.latitude);
+  const orderLongitude = Number(stop.serviceOrder?.longitude);
+  if (Number.isFinite(orderLatitude) && Number.isFinite(orderLongitude)) {
+    return { latitude: orderLatitude, longitude: orderLongitude };
+  }
+
   const latitude = Number(stop.latitude);
   const longitude = Number(stop.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
   return { latitude, longitude };
 }
 
+function serviceOrderFullAddress(stop: RouteStop): string {
+  const order = stop.serviceOrder;
+  if (!order) return stop.address || stop.label;
+
+  const street = [order.addressLine, order.addressNumber].filter(Boolean).join(', ');
+  const locality = [order.neighborhood, `${order.city} - ${order.state}`, order.postalCode]
+    .filter(Boolean)
+    .join(', ');
+  return [street, order.addressComplement, locality].filter(Boolean).join(', ')
+    || order.formattedAddress
+    || stop.address
+    || stop.label;
+}
+
 function stopNavigationDestination(stop: RouteStop): string {
   const coordinates = validStopCoordinates(stop);
   if (coordinates) return `${coordinates.latitude},${coordinates.longitude}`;
-  return stop.address || stop.label;
+  return serviceOrderFullAddress(stop);
 }
 
 function googleMapsStopUrl(stop: RouteStop): string {
@@ -133,10 +153,12 @@ export default function RoutesPage() {
     setLoading(true);
     setError('');
     try {
-      const [routeData, orderData] = await Promise.all([
-        api<RoutePlan[]>(`/routes${queryString({ date })}`),
-        api<{ items: ServiceOrder[]; total: number }>(`/orders${queryString({ date, take: 200 })}`),
-      ]);
+      const routeData = await api<RoutePlan[]>(`/routes${queryString({ date })}`);
+      const orderData = user?.role === 'DRIVER'
+        ? { items: [] as ServiceOrder[], total: 0 }
+        : await api<{ items: ServiceOrder[]; total: number }>(
+            `/orders${queryString({ date, take: 200 })}`,
+          );
       setRoutes(routeData);
       setOrders(orderData.items);
       setExpanded((current) => current ?? routeData[0]?.id ?? null);
@@ -145,7 +167,7 @@ export default function RoutesPage() {
     } finally {
       setLoading(false);
     }
-  }, [date]);
+  }, [date, user?.role]);
 
   useEffect(() => {
     void load();
@@ -335,7 +357,7 @@ export default function RoutesPage() {
                 <button className="route-planner-header" onClick={() => setExpanded(isExpanded ? null : route.id)}>
                   <div className="vehicle-symbol large"><Icon name="vehicles" /></div>
                   <div className="route-header-main">
-                    <div className="route-title-line"><h2>{route.vehicle.name}</h2><span>{route.vehicle.plate}</span><StatusBadge value={route.status} compact /></div>
+                    <div className="route-title-line"><h2>{route.vehicle.name}</h2><span>{route.vehicle.plate}</span>{route.driver ? <span>Motorista: {route.driver.name}</span> : null}<StatusBadge value={route.status} compact /></div>
                     <div className="route-summary-metrics"><span><Icon name="pin" />{serviceStops.length} paradas</span><span><Icon name="distance" />{formatDistance(route.totalDistanceMeters)}</span><span><Icon name="clock" />{formatDuration(route.totalDurationSeconds)}</span><span>Revisão {route.revision}</span></div>
                     <div className="progress-track"><span style={{ width: `${percent}%` }} /></div>
                   </div>

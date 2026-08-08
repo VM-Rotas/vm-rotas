@@ -106,13 +106,15 @@ model User {
   name           String
   email          String   @unique
   passwordHash   String
-  role           UserRole @default(DISPATCHER)
-  active         Boolean  @default(true)
+  role              UserRole @default(DISPATCHER)
+  assignedVehicleId String?  @unique @db.Uuid
+  active            Boolean  @default(true)
   lastLoginAt    DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organization       Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedVehicle    Vehicle?          @relation("DriverAssignedVehicle", fields: [assignedVehicleId], references: [id], onDelete: SetNull)
   createdOrders      ServiceOrder[]     @relation("OrdersCreatedBy")
   drivenRoutes       RoutePlan[]        @relation("RoutesDrivenBy")
   requestedRuns      OptimizationRun[]  @relation("OptimizationRequestedBy")
@@ -165,6 +167,7 @@ model Vehicle {
   trackingSessions TrackingSession[]
   trackingPoints   TrackingPoint[]
   unavailability   VehicleUnavailability[]
+  assignedDriver   User?                @relation("DriverAssignedVehicle")
 
   @@unique([organizationId, plate])
   @@index([organizationId, status, active])

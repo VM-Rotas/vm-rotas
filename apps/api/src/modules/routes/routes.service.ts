@@ -31,10 +31,12 @@ export class RoutesService {
     private readonly vehicleUnavailability: VehicleUnavailabilityService,
   ) {}
 
-  list(user: AuthUser, query: ListRoutesQueryDto) {
-    return this.prisma.routePlan.findMany({
+  async list(user: AuthUser, query: ListRoutesQueryDto) {
+    const driverVehicleId = await this.driverVehicleRestriction(user);
+    const routes = await this.prisma.routePlan.findMany({
       where: {
         organizationId: user.organizationId,
+        ...(driverVehicleId ? { vehicleId: driverVehicleId } : {}),
         ...(query.date ? { routeDate: parseDateOnly(query.date) } : {}),
         ...(query.status ? { status: query.status } : { status: { not: 'SUPERSEDED' } }),
       },
@@ -55,6 +57,16 @@ export class RoutesService {
                 status: true,
                 recipientName: true,
                 recipientPhone: true,
+                addressLine: true,
+                addressNumber: true,
+                addressComplement: true,
+                neighborhood: true,
+                city: true,
+                state: true,
+                postalCode: true,
+                formattedAddress: true,
+                latitude: true,
+                longitude: true,
                 timeWindowStart: true,
                 timeWindowEnd: true,
               },
@@ -64,11 +76,29 @@ export class RoutesService {
       },
       orderBy: [{ routeDate: 'desc' }, { createdAt: 'desc' }],
     });
+    return routes.map((route) => ({
+      ...route,
+      stops: route.stops.map((stop) =>
+        stop.serviceOrder?.latitude != null && stop.serviceOrder?.longitude != null
+          ? {
+              ...stop,
+              latitude: stop.serviceOrder.latitude,
+              longitude: stop.serviceOrder.longitude,
+              address: this.formatOrderAddress(stop.serviceOrder),
+            }
+          : stop,
+      ),
+    }));
   }
 
   async findOne(user: AuthUser, id: string) {
+    const driverVehicleId = await this.driverVehicleRestriction(user);
     const route = await this.prisma.routePlan.findFirst({
-      where: { id, organizationId: user.organizationId },
+      where: {
+        id,
+        organizationId: user.organizationId,
+        ...(driverVehicleId ? { vehicleId: driverVehicleId } : {}),
+      },
       include: {
         depot: true,
         vehicle: true,
@@ -84,7 +114,19 @@ export class RoutesService {
       },
     });
     if (!route) throw new NotFoundException('Rota não encontrada.');
-    return route;
+    return {
+      ...route,
+      stops: route.stops.map((stop) =>
+        stop.serviceOrder?.latitude != null && stop.serviceOrder?.longitude != null
+          ? {
+              ...stop,
+              latitude: stop.serviceOrder.latitude,
+              longitude: stop.serviceOrder.longitude,
+              address: this.formatOrderAddress(stop.serviceOrder),
+            }
+          : stop,
+      ),
+    };
   }
 
   async optimize(user: AuthUser, dto: OptimizeRoutesDto) {
@@ -771,11 +813,15 @@ export class RoutesService {
     stopId: string,
     dto: UpdateStopStatusDto,
   ) {
+    const driverVehicleId = await this.driverVehicleRestriction(user);
     const stop = await this.prisma.routeStop.findFirst({
       where: {
         id: stopId,
         routePlanId: routeId,
-        routePlan: { organizationId: user.organizationId },
+        routePlan: {
+          organizationId: user.organizationId,
+          ...(driverVehicleId ? { vehicleId: driverVehicleId } : {}),
+        },
       },
       include: { routePlan: true, serviceOrder: true },
     });
@@ -899,6 +945,26 @@ export class RoutesService {
     return lockedStop || routeStatus === 'IN_PROGRESS' ? new Date(now) : undefined;
   }
 
+  private async driverVehicleRestriction(user: AuthUser): Promise<string | undefined> {
+    if (user.role !== 'DRIVER') return undefined;
+
+    const driver = await this.prisma.user.findFirst({
+      where: {
+        id: user.sub,
+        organizationId: user.organizationId,
+        role: 'DRIVER',
+        active: true,
+      },
+      select: { assignedVehicleId: true },
+    });
+    if (!driver?.assignedVehicleId) {
+      throw new BadRequestException(
+        'Sua conta de motorista ainda não possui um veículo atribuído. Peça a um administrador para configurar o vínculo em Equipe e acessos.',
+      );
+    }
+    return driver.assignedVehicleId;
+  }
+
   private async findDepot(organizationId: string, depotId?: string) {
     const depot = await this.prisma.depot.findFirst({
       where: {
@@ -951,8 +1017,12 @@ export class RoutesService {
     recipientName: string;
     formattedAddress: string | null;
     addressLine: string;
+    addressNumber: string | null;
+    addressComplement: string | null;
+    neighborhood: string | null;
     city: string;
     state: string;
+    postalCode: string | null;
     type: 'DELIVERY' | 'PICKUP';
     priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
     serviceDurationMin: number;
@@ -972,7 +1042,7 @@ export class RoutesService {
         : undefined,
       assignedVehicleId: order.assignedVehicleId ?? undefined,
       label: `${order.type === 'PICKUP' ? 'Coletar em' : 'Entregar em'} ${order.recipientName}`,
-      address: order.formattedAddress ?? `${order.addressLine}, ${order.city} - ${order.state}`,
+      address: this.formatOrderAddress(order),
       type: order.type,
       priority: order.priority,
       serviceDurationMin: order.serviceDurationMin,
@@ -983,6 +1053,24 @@ export class RoutesService {
       latitude: Number(order.latitude),
       longitude: Number(order.longitude),
     };
+  }
+
+  private formatOrderAddress(order: {
+    formattedAddress: string | null;
+    addressLine: string;
+    addressNumber: string | null;
+    addressComplement: string | null;
+    neighborhood: string | null;
+    city: string;
+    state: string;
+    postalCode: string | null;
+  }): string {
+    const street = [order.addressLine, order.addressNumber].filter(Boolean).join(', ');
+    const locality = [order.neighborhood, `${order.city} - ${order.state}`, order.postalCode]
+      .filter(Boolean)
+      .join(', ');
+    const preciseAddress = [street, order.addressComplement, locality].filter(Boolean).join(', ');
+    return preciseAddress || order.formattedAddress || order.addressLine;
   }
 
   private mapVehicle(
@@ -1029,6 +1117,20 @@ export class RoutesService {
     const orderMap = new Map(orders.map((order) => [order.id, order]));
     const vehicleMap = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
     const depot = await this.prisma.depot.findUniqueOrThrow({ where: { id: depotId } });
+    const assignedDrivers = await this.prisma.user.findMany({
+      where: {
+        organizationId: user.organizationId,
+        role: 'DRIVER',
+        active: true,
+        assignedVehicleId: { in: vehicles.map((vehicle) => vehicle.id) },
+      },
+      select: { id: true, assignedVehicleId: true },
+    });
+    const driverByVehicle = new Map(
+      assignedDrivers.flatMap((driver) =>
+        driver.assignedVehicleId ? [[driver.assignedVehicleId, driver.id] as const] : [],
+      ),
+    );
 
     return this.prisma.$transaction(async (transaction) => {
       const vehicleIds = vehicles.map((vehicle) => vehicle.id);
@@ -1061,6 +1163,7 @@ export class RoutesService {
             organizationId: user.organizationId,
             depotId,
             vehicleId: vehicle.id,
+            driverId: driverByVehicle.get(vehicle.id),
             routeDate,
             status: 'OPTIMIZED',
             provider,
@@ -1138,7 +1241,7 @@ export class RoutesService {
           type: 'SERVICE' as const,
           sequence: index + 1,
           label: `${order.type === 'PICKUP' ? 'Coletar em' : 'Entregar em'} ${order.recipientName}`,
-          address: order.formattedAddress ?? `${order.addressLine}, ${order.city} - ${order.state}`,
+          address: this.formatOrderAddress(order),
           latitude: Number(order.latitude),
           longitude: Number(order.longitude),
           plannedArrivalAt: visit.plannedArrivalAt,
@@ -1197,7 +1300,7 @@ export class RoutesService {
         type: 'SERVICE',
         sequence: startSequence + index,
         label: `${order.type === 'PICKUP' ? 'Coletar em' : 'Entregar em'} ${order.recipientName}`,
-        address: order.formattedAddress ?? `${order.addressLine}, ${order.city} - ${order.state}`,
+        address: this.formatOrderAddress(order),
         latitude: Number(order.latitude),
         longitude: Number(order.longitude),
         plannedArrivalAt: visit.plannedArrivalAt,

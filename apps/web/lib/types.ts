@@ -128,6 +128,16 @@ export interface RouteStop {
     | 'status'
     | 'recipientName'
     | 'recipientPhone'
+    | 'addressLine'
+    | 'addressNumber'
+    | 'addressComplement'
+    | 'neighborhood'
+    | 'city'
+    | 'state'
+    | 'postalCode'
+    | 'formattedAddress'
+    | 'latitude'
+    | 'longitude'
     | 'timeWindowStart'
     | 'timeWindowEnd'
   > | null;
@@ -143,6 +153,7 @@ export interface RoutePlan {
   totalDurationSeconds: number;
   encodedPolyline?: string | null;
   vehicle: Vehicle;
+  driver?: { id: string; name: string; email: string } | null;
   depot: {
     id: string;
     name: string;
@@ -173,6 +184,8 @@ export interface SystemUser {
   name: string;
   email: string;
   role: UserRole;
+  assignedVehicleId?: string | null;
+  assignedVehicle?: Pick<Vehicle, 'id' | 'name' | 'plate' | 'status' | 'active'> | null;
   active: boolean;
   lastLoginAt?: string | null;
   createdAt: string;

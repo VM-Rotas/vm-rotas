@@ -10,6 +10,16 @@ const publicUserSelect = {
   name: true,
   email: true,
   role: true,
+  assignedVehicleId: true,
+  assignedVehicle: {
+    select: {
+      id: true,
+      name: true,
+      plate: true,
+      status: true,
+      active: true,
+    },
+  },
   active: true,
   lastLoginAt: true,
   createdAt: true,
@@ -33,8 +43,18 @@ export class UsersService {
     const email = dto.email.trim().toLowerCase();
     const duplicate = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
     if (duplicate) throw new BadRequestException('Já existe um usuário com este e-mail.');
-    const passwordHash = await hash(dto.password, 12);
 
+    const active = dto.active ?? true;
+    const assignedVehicleId =
+      dto.role === 'DRIVER' && active && dto.assignedVehicleId
+        ? await this.validateDriverVehicle(user.organizationId, dto.assignedVehicleId)
+        : null;
+
+    if (dto.assignedVehicleId && dto.role !== 'DRIVER') {
+      throw new BadRequestException('Somente contas com função Motorista podem receber um veículo fixo.');
+    }
+
+    const passwordHash = await hash(dto.password, 12);
     return this.prisma.$transaction(async (transaction) => {
       const created = await transaction.user.create({
         data: {
@@ -43,7 +63,8 @@ export class UsersService {
           email,
           passwordHash,
           role: dto.role,
-          active: dto.active ?? true,
+          assignedVehicleId,
+          active,
         },
         select: publicUserSelect,
       });
@@ -54,7 +75,11 @@ export class UsersService {
           action: 'USER_CREATED',
           entityType: 'User',
           entityId: created.id,
-          metadata: { email: created.email, role: created.role },
+          metadata: {
+            email: created.email,
+            role: created.role,
+            assignedVehicleId: created.assignedVehicleId,
+          },
         },
       });
       return created;
@@ -82,7 +107,9 @@ export class UsersService {
       const ownerCount = await this.prisma.user.count({
         where: { organizationId: user.organizationId, role: 'OWNER', active: true },
       });
-      if (ownerCount <= 1) throw new BadRequestException('A organização deve manter ao menos um proprietário ativo.');
+      if (ownerCount <= 1) {
+        throw new BadRequestException('A organização deve manter ao menos um proprietário ativo.');
+      }
     }
 
     const normalizedEmail = dto.email?.trim().toLowerCase();
@@ -96,8 +123,23 @@ export class UsersService {
       }
     }
 
-    const passwordHash = dto.password ? await hash(dto.password, 12) : undefined;
+    const targetRole = dto.role ?? existing.role;
+    const targetActive = dto.active ?? existing.active;
+    let assignedVehicleId: string | null | undefined;
 
+    if (targetRole !== 'DRIVER' || !targetActive) {
+      assignedVehicleId = null;
+    } else if (dto.assignedVehicleId !== undefined) {
+      assignedVehicleId = dto.assignedVehicleId
+        ? await this.validateDriverVehicle(user.organizationId, dto.assignedVehicleId, id)
+        : null;
+    }
+
+    if (dto.assignedVehicleId && targetRole !== 'DRIVER') {
+      throw new BadRequestException('Somente contas com função Motorista podem receber um veículo fixo.');
+    }
+
+    const passwordHash = dto.password ? await hash(dto.password, 12) : undefined;
     return this.prisma.$transaction(async (transaction) => {
       const updated = await transaction.user.update({
         where: { id },
@@ -105,6 +147,7 @@ export class UsersService {
           ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
           ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
           ...(dto.role !== undefined ? { role: dto.role } : {}),
+          ...(assignedVehicleId !== undefined ? { assignedVehicleId } : {}),
           ...(dto.active !== undefined ? { active: dto.active } : {}),
           ...(passwordHash ? { passwordHash } : {}),
         },
@@ -124,12 +167,40 @@ export class UsersService {
             email: updated.email,
             role: updated.role,
             active: updated.active,
+            assignedVehicleId: updated.assignedVehicleId,
           },
         },
       });
 
       return updated;
     });
+  }
+
+  private async validateDriverVehicle(
+    organizationId: string,
+    vehicleId: string,
+    currentUserId?: string,
+  ): Promise<string> {
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id: vehicleId, organizationId, active: true },
+      select: { id: true, name: true, plate: true },
+    });
+    if (!vehicle) throw new BadRequestException('O veículo selecionado não existe ou está inativo.');
+
+    const assignedToAnother = await this.prisma.user.findFirst({
+      where: {
+        organizationId,
+        assignedVehicleId: vehicleId,
+        ...(currentUserId ? { NOT: { id: currentUserId } } : {}),
+      },
+      select: { id: true, name: true },
+    });
+    if (assignedToAnother) {
+      throw new BadRequestException(
+        `${vehicle.name} já está atribuído ao motorista ${assignedToAnother.name}. Remova esse vínculo antes de continuar.`,
+      );
+    }
+    return vehicle.id;
   }
 
   private assertCanManageRole(user: AuthUser, targetRole: AuthUser['role']): void {

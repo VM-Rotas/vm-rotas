@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { api, ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/format';
-import type { SystemUser, UserRole } from '@/lib/types';
+import type { SystemUser, UserRole, Vehicle } from '@/lib/types';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 
 interface CreateUserForm {
@@ -15,12 +15,14 @@ interface CreateUserForm {
   email: string;
   password: string;
   role: UserRole;
+  assignedVehicleId: string;
 }
 
 interface EditUserForm {
   name: string;
   email: string;
   role: UserRole;
+  assignedVehicleId: string;
 }
 
 interface PasswordForm {
@@ -35,12 +37,14 @@ const initialCreateForm: CreateUserForm = {
   email: '',
   password: '',
   role: 'DISPATCHER',
+  assignedVehicleId: '',
 };
 
 const initialEditForm: EditUserForm = {
   name: '',
   email: '',
   role: 'DISPATCHER',
+  assignedVehicleId: '',
 };
 
 const initialPasswordForm: PasswordForm = {
@@ -59,6 +63,7 @@ const roleLabels: Record<UserRole, string> = {
 export default function TeamPage() {
   const { user } = useAuth();
   const [users, setUsers] = useState<SystemUser[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -75,7 +80,12 @@ export default function TeamPage() {
     setLoading(true);
     setError('');
     try {
-      setUsers(await api<SystemUser[]>('/users'));
+      const [userData, vehicleData] = await Promise.all([
+        api<SystemUser[]>('/users'),
+        api<Vehicle[]>('/vehicles'),
+      ]);
+      setUsers(userData);
+      setVehicles(vehicleData);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível carregar a equipe.');
     } finally {
@@ -111,7 +121,12 @@ export default function TeamPage() {
     setSuccess('');
     setDrawerError('');
     setSelectedUser(target);
-    setEditForm({ name: target.name, email: target.email, role: target.role });
+    setEditForm({
+      name: target.name,
+      email: target.email,
+      role: target.role,
+      assignedVehicleId: target.assignedVehicleId ?? '',
+    });
     setDrawerMode('edit');
   }
 
@@ -135,7 +150,16 @@ export default function TeamPage() {
     setDrawerError('');
     setSuccess('');
     try {
-      await api('/users', { method: 'POST', body: JSON.stringify(createForm) });
+      await api('/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...createForm,
+          assignedVehicleId:
+            createForm.role === 'DRIVER' && createForm.assignedVehicleId
+              ? createForm.assignedVehicleId
+              : undefined,
+        }),
+      });
       closeDrawer();
       setSuccess('Usuário criado e pronto para acessar o VM Rotas.');
       await load();
@@ -156,7 +180,11 @@ export default function TeamPage() {
     try {
       await api(`/users/${selectedUser.id}`, {
         method: 'PATCH',
-        body: JSON.stringify(editForm),
+        body: JSON.stringify({
+          ...editForm,
+          assignedVehicleId:
+            editForm.role === 'DRIVER' ? editForm.assignedVehicleId || null : null,
+        }),
       });
       const changedOwnEmail = selectedUser.id === user?.sub && editForm.email.trim().toLowerCase() !== selectedUser.email;
       closeDrawer();
@@ -255,7 +283,7 @@ export default function TeamPage() {
         ) : (
           <div className="responsive-table-wrap">
             <table className="data-table">
-              <thead><tr><th>Usuário</th><th>Função</th><th>Situação</th><th>Último acesso</th><th>Criado em</th><th aria-label="Ações" /></tr></thead>
+              <thead><tr><th>Usuário</th><th>Função</th><th>Veículo</th><th>Situação</th><th>Último acesso</th><th>Criado em</th><th aria-label="Ações" /></tr></thead>
               <tbody>
                 {users.map((item) => {
                   const manageable = canManageTarget(item);
@@ -264,6 +292,13 @@ export default function TeamPage() {
                     <tr key={item.id}>
                       <td data-label="Usuário"><strong>{item.name}</strong><small>{item.email}</small></td>
                       <td data-label="Função">{roleLabels[item.role]}</td>
+                      <td data-label="Veículo">
+                        {item.role === 'DRIVER' ? (
+                          item.assignedVehicle ? (
+                            <><strong>{item.assignedVehicle.name}</strong><small>{item.assignedVehicle.plate}</small></>
+                          ) : <small>Sem veículo atribuído</small>
+                        ) : <small>—</small>}
+                      </td>
                       <td data-label="Situação"><StatusBadge value={item.active ? 'AVAILABLE' : 'INACTIVE'} compact /></td>
                       <td data-label="Último acesso">{item.lastLoginAt ? formatDate(item.lastLoginAt) : 'Nunca'}</td>
                       <td data-label="Criado em">{formatDate(item.createdAt)}</td>
@@ -305,7 +340,10 @@ export default function TeamPage() {
               <label className="field"><span>Nome</span><input required value={createForm.name} onChange={(event) => setCreateForm({ ...createForm, name: event.target.value })} /></label>
               <label className="field"><span>E-mail</span><input type="email" required value={createForm.email} onChange={(event) => setCreateForm({ ...createForm, email: event.target.value })} /></label>
               <label className="field"><span>Senha inicial</span><input type="password" minLength={8} required autoComplete="new-password" value={createForm.password} onChange={(event) => setCreateForm({ ...createForm, password: event.target.value })} /><small className="field-help">Use ao menos 8 caracteres.</small></label>
-              <label className="field"><span>Função</span><select value={createForm.role} onChange={(event) => setCreateForm({ ...createForm, role: event.target.value as UserRole })}>{user?.role === 'OWNER' ? <option value="OWNER">Proprietário</option> : null}<option value="ADMIN">Administrador</option><option value="DISPATCHER">Despachante</option><option value="DRIVER">Motorista</option><option value="VIEWER">Somente consulta</option></select></label>
+              <label className="field"><span>Função</span><select value={createForm.role} onChange={(event) => { const role = event.target.value as UserRole; setCreateForm({ ...createForm, role, assignedVehicleId: role === 'DRIVER' ? createForm.assignedVehicleId : '' }); }}>{user?.role === 'OWNER' ? <option value="OWNER">Proprietário</option> : null}<option value="ADMIN">Administrador</option><option value="DISPATCHER">Despachante</option><option value="DRIVER">Motorista</option><option value="VIEWER">Somente consulta</option></select></label>
+               {createForm.role === 'DRIVER' ? (
+                 <label className="field"><span>Veículo atribuído</span><select value={createForm.assignedVehicleId} onChange={(event) => setCreateForm({ ...createForm, assignedVehicleId: event.target.value })}><option value="">Sem veículo</option>{vehicles.filter((vehicle) => vehicle.active).map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name} · {vehicle.plate}</option>)}</select><small className="field-help">O motorista verá e executará somente as rotas deste veículo.</small></label>
+               ) : null}
               <div className="role-guide"><strong>Permissões</strong><p><b>Despachante:</b> missões, veículos, mapa e roteirização. <b>Motorista:</b> execução das paradas. <b>Consulta:</b> leitura dos dados.</p></div>
               <div className="drawer-actions"><button type="button" className="button button-secondary" onClick={closeDrawer}>Cancelar</button><button type="submit" className="button button-primary" disabled={saving}>{saving ? <><span className="spinner small" />Salvando...</> : 'Criar usuário'}</button></div>
             </form>
@@ -319,7 +357,10 @@ export default function TeamPage() {
               {drawerError ? <ErrorBanner message={drawerError} /> : null}
               <label className="field"><span>Nome</span><input required minLength={2} value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} /></label>
               <label className="field"><span>E-mail de acesso</span><input type="email" required value={editForm.email} onChange={(event) => setEditForm({ ...editForm, email: event.target.value })} /><small className="field-help">Se o e-mail mudar, o próximo login deverá usar o novo endereço.</small></label>
-              <label className="field"><span>Função</span><select disabled={selectedUser.id === user?.sub} value={editForm.role} onChange={(event) => setEditForm({ ...editForm, role: event.target.value as UserRole })}>{user?.role === 'OWNER' ? <option value="OWNER">Proprietário</option> : null}<option value="ADMIN">Administrador</option><option value="DISPATCHER">Despachante</option><option value="DRIVER">Motorista</option><option value="VIEWER">Somente consulta</option></select>{selectedUser.id === user?.sub ? <small className="field-help">A função da conta que está em uso não pode ser alterada nesta tela.</small> : null}</label>
+              <label className="field"><span>Função</span><select disabled={selectedUser.id === user?.sub} value={editForm.role} onChange={(event) => { const role = event.target.value as UserRole; setEditForm({ ...editForm, role, assignedVehicleId: role === 'DRIVER' ? editForm.assignedVehicleId : '' }); }}>{user?.role === 'OWNER' ? <option value="OWNER">Proprietário</option> : null}<option value="ADMIN">Administrador</option><option value="DISPATCHER">Despachante</option><option value="DRIVER">Motorista</option><option value="VIEWER">Somente consulta</option></select>{selectedUser.id === user?.sub ? <small className="field-help">A função da conta que está em uso não pode ser alterada nesta tela.</small> : null}</label>
+               {editForm.role === 'DRIVER' ? (
+                 <label className="field"><span>Veículo atribuído</span><select value={editForm.assignedVehicleId} onChange={(event) => setEditForm({ ...editForm, assignedVehicleId: event.target.value })}><option value="">Sem veículo</option>{vehicles.filter((vehicle) => vehicle.active || vehicle.id === selectedUser.assignedVehicleId).map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name} · {vehicle.plate}</option>)}</select><small className="field-help">Cada veículo pode ficar vinculado a apenas um motorista por vez.</small></label>
+               ) : null}
               <div className="role-guide"><strong>Acesso</strong><p>Para retirar o acesso sem apagar o histórico do usuário, utilize o botão <b>Desativar</b> na lista.</p></div>
               <div className="drawer-actions"><button type="button" className="button button-secondary" onClick={closeDrawer}>Cancelar</button><button type="submit" className="button button-primary" disabled={saving}>{saving ? <><span className="spinner small" />Salvando...</> : 'Salvar alterações'}</button></div>
             </form>
