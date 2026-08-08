@@ -199,14 +199,6 @@ export class OrdersService {
     }
 
     const plannedDate = parseDateOnly(dto.plannedDate);
-    if (assignedVehicle) {
-      await this.vehicleUnavailability.assertVehicleFreeForMission(
-        user,
-        assignedVehicle.id,
-        dto.plannedDate,
-        this.missionWindows(dto.plannedDate, [dto.pickupTime, dto.deliveryTime]),
-      );
-    }
     const reference = this.generateMissionCode();
     const geocodedPoints = await Promise.all(
       points.map(async (point) => ({
@@ -244,6 +236,26 @@ export class OrdersService {
       })),
     );
 
+    const missionSchedule = await this.estimateMissionSchedule(
+      user.organizationId,
+      dto.plannedDate,
+      geocodedPoints.map(({ point, geocoded }) => ({
+        type: point.type,
+        time: point.time,
+        latitude: geocoded?.latitude ?? point.latitude,
+        longitude: geocoded?.longitude ?? point.longitude,
+      })),
+    );
+
+    if (assignedVehicle && missionSchedule) {
+      await this.vehicleUnavailability.assertVehicleFreeForMission(
+        user,
+        assignedVehicle.id,
+        dto.plannedDate,
+        [{ startsAt: missionSchedule.startsAt, endsAt: missionSchedule.endsAt }],
+      );
+    }
+
     return this.prisma.$transaction(async (transaction) => {
       const created: ServiceOrder[] = [];
 
@@ -259,7 +271,9 @@ export class OrdersService {
         const typeSuffix = point.type === 'PICKUP' ? 'C' : 'E';
         const timeWindowStart = this.missionDateTime(dto.plannedDate, point.time);
         const timeWindowEnd = timeWindowStart
-          ? new Date(timeWindowStart.getTime() + 60 * 60 * 1_000)
+          ? missionSchedule && missionSchedule.endsAt > timeWindowStart
+            ? missionSchedule.endsAt
+            : new Date(timeWindowStart.getTime() + 10 * 60 * 1_000)
           : null;
 
         const order = await transaction.serviceOrder.create({
@@ -916,17 +930,113 @@ export class OrdersService {
     }
   }
 
-  private missionWindows(
+  private async estimateMissionSchedule(
+    organizationId: string,
     plannedDate: string,
-    times: Array<string | undefined>,
-  ): Array<{ startsAt: Date; endsAt: Date }> {
-    return times
-      .map((time) => this.missionDateTime(plannedDate, time))
-      .filter((value): value is Date => value !== null)
-      .map((startsAt) => ({
-        startsAt,
-        endsAt: new Date(startsAt.getTime() + 60 * 60 * 1_000),
-      }));
+    points: Array<{
+      type: 'PICKUP' | 'DELIVERY';
+      time?: string;
+      latitude?: number;
+      longitude?: number;
+    }>,
+  ): Promise<{ startsAt: Date; endsAt: Date; travelSeconds: number } | null> {
+    const explicitTimes = points
+      .map((point) => this.missionDateTime(plannedDate, point.time))
+      .filter((value): value is Date => value !== null);
+    if (explicitTimes.length === 0) return null;
+
+    const startsAt = new Date(Math.min(...explicitTimes.map((value) => value.getTime())));
+    const latestExplicit = new Date(Math.max(...explicitTimes.map((value) => value.getTime())));
+    const depot = await this.prisma.depot.findFirst({
+      where: { organizationId, active: true, isDefault: true },
+      select: { latitude: true, longitude: true },
+    });
+
+    const routePoints = [
+      ...(depot
+        ? [{ latitude: Number(depot.latitude), longitude: Number(depot.longitude) }]
+        : []),
+      ...points
+        .filter((point) => point.latitude != null && point.longitude != null)
+        .map((point) => ({ latitude: point.latitude as number, longitude: point.longitude as number })),
+    ].filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude));
+
+    const travelSeconds = routePoints.length >= 2
+      ? await this.estimateDriveSeconds(routePoints)
+      : 0;
+    const marginSeconds = 10 * 60;
+    const byTravel = new Date(startsAt.getTime() + (travelSeconds + marginSeconds) * 1_000);
+    const byExplicitTime = new Date(latestExplicit.getTime() + marginSeconds * 1_000);
+    const endsAt = byTravel > byExplicitTime ? byTravel : byExplicitTime;
+
+    return { startsAt, endsAt, travelSeconds };
+  }
+
+  private async estimateDriveSeconds(
+    points: Array<{ latitude: number; longitude: number }>,
+  ): Promise<number> {
+    const fallback = () => {
+      let meters = 0;
+      for (let index = 1; index < points.length; index += 1) {
+        meters += this.haversineMeters(points[index - 1]!, points[index]!);
+      }
+      const metersPerSecond = (35 * 1_000) / 3_600;
+      return Math.max(60, Math.round(meters / metersPerSecond));
+    };
+
+    const apiKey = process.env.GEOAPIFY_API_KEY?.trim();
+    if (!apiKey) return fallback();
+
+    try {
+      const response = await fetch(
+        `https://api.geoapify.com/v1/routematrix?apiKey=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'drive',
+            traffic: 'approximated',
+            type: 'balanced',
+            units: 'metric',
+            sources: points.map((point) => ({ location: [point.longitude, point.latitude] })),
+            targets: points.map((point) => ({ location: [point.longitude, point.latitude] })),
+          }),
+          signal: AbortSignal.timeout(12_000),
+        },
+      );
+      if (!response.ok) return fallback();
+      const payload = (await response.json()) as {
+        sources_to_targets?: Array<Array<{ time?: number | null } | null>>;
+      };
+      const matrix = payload.sources_to_targets;
+      if (!matrix) return fallback();
+
+      let total = 0;
+      for (let index = 1; index < points.length; index += 1) {
+        const seconds = Number(matrix[index - 1]?.[index]?.time);
+        if (!Number.isFinite(seconds)) return fallback();
+        total += Math.max(0, seconds);
+      }
+      return Math.max(60, Math.round(total));
+    } catch {
+      return fallback();
+    }
+  }
+
+  private haversineMeters(
+    a: { latitude: number; longitude: number },
+    b: { latitude: number; longitude: number },
+  ): number {
+    const radius = 6_371_000;
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const lat1 = toRad(a.latitude);
+    const lat2 = toRad(b.latitude);
+    const dLat = toRad(b.latitude - a.latitude);
+    const dLon = toRad(b.longitude - a.longitude);
+    const sinLat = Math.sin(dLat / 2);
+    const sinLon = Math.sin(dLon / 2);
+    const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLon * sinLon;
+    return radius * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
   }
 
   private missionDateTime(plannedDate: string, time?: string): Date | null {
